@@ -71,6 +71,7 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
       setEventoEditar(null);
     } catch (error) {
       console.error("Error al guardar evento:", error);
+      throw error;
     }
   };
 
