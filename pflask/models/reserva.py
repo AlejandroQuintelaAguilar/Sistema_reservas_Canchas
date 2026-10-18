@@ -23,6 +23,8 @@ class Reserva(db.Model):
         nullable=False,
     )
     monto_total = db.Column(db.Numeric(10, 2))
+    expira_en = db.Column(db.DateTime)
+    canal_origen = db.Column(db.String(20), nullable=False, default="web")
 
     def to_dict(self):
         return {
@@ -40,4 +42,6 @@ class Reserva(db.Model):
             "monto_total": (
                 float(self.monto_total) if self.monto_total is not None else None
             ),
+            "expira_en": self.expira_en.isoformat() if self.expira_en else None,
+            "canal_origen": self.canal_origen,
         }

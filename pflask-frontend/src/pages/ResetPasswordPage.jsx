@@ -5,20 +5,10 @@ import * as yup from "yup";
 import { useParams, useNavigate, Link } from "react-router-dom";
 
 import { authService } from "../services/authService";
+import { REQUISITOS_PASSWORD, esquemaContrasena } from "../utils/validaciones";
 
 const schema = yup
-  .object({
-    password: yup
-      .string()
-      .required("La contraseña es obligatoria.")
-      .min(8, "Mínimo 8 caracteres.")
-      .matches(/[A-Z]/, "Debe tener una mayúscula.")
-      .matches(/[^A-Za-z0-9]/, "Debe tener un símbolo."),
-    confirmPassword: yup
-      .string()
-      .oneOf([yup.ref("password")], "Las contraseñas no coinciden.")
-      .required("Confirma la contraseña."),
-  })
+  .object(esquemaContrasena(yup, "password", "confirmPassword"))
   .required();
 
 const ResetPasswordPage = () => {
@@ -33,9 +23,17 @@ const ResetPasswordPage = () => {
   const [message, setMessage] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Sin token el enlace no sirve: /reset-password a secas llegaria al backend
+  // con el campo omitido y un 400 sin explicación.
+  const tokenValido = Boolean(String(token || "").trim());
+
   const onSubmit = async (data) => {
     setMessage("");
     setErrorMsg("");
+    if (!tokenValido) {
+      setErrorMsg("El enlace no es válido o ya expiró. Pide uno nuevo.");
+      return;
+    }
     try {
       await authService.restablecerContrasena(token, data.password);
       setMessage("Contraseña actualizada. Redirigiendo al inicio de sesión...");
@@ -60,6 +58,12 @@ const ResetPasswordPage = () => {
           <p>Escribe tu nueva contraseña</p>
         </div>
 
+        {!tokenValido && (
+          <div className="mensaje error">
+            El enlace no es válido o ya expiró. Pide uno nuevo desde{" "}
+            <Link to="/forgot-password">olvidé mi contraseña</Link>.
+          </div>
+        )}
         {errorMsg && <div className="mensaje error">{errorMsg}</div>}
         {message && <div className="mensaje success">{message}</div>}
 
@@ -68,11 +72,16 @@ const ResetPasswordPage = () => {
             <label>Nueva contraseña</label>
             <input
               type="password"
+              autoComplete="new-password"
               placeholder="Mínimo 8 caracteres"
+              disabled={!tokenValido}
               {...register("password")}
             />
             {errors.password && (
               <span className="campo-error">{errors.password.message}</span>
+            )}
+            {!errors.password && (
+              <small className="hint">{REQUISITOS_PASSWORD}</small>
             )}
           </div>
 
@@ -80,7 +89,9 @@ const ResetPasswordPage = () => {
             <label>Confirmar contraseña</label>
             <input
               type="password"
+              autoComplete="new-password"
               placeholder="Repite la contraseña"
+              disabled={!tokenValido}
               {...register("confirmPassword")}
             />
             {errors.confirmPassword && (
@@ -90,7 +101,7 @@ const ResetPasswordPage = () => {
             )}
           </div>
 
-          <button type="submit" className="btn-primary btn-block">
+          <button type="submit" className="btn-primary btn-block" disabled={!tokenValido}>
             Restablecer contraseña
           </button>
         </form>

@@ -3,6 +3,7 @@ import type { Evento, CreateEventoDTO } from "../types/evento.types";
 import { TablaEventosAdmin } from "../components/admin/TablaEventosAdmin";
 import { EventoFormModal } from "../components/admin/EventoFormModal";
 import { useEventos } from "../hooks/useEventos";
+import { useAuth } from "../context/AuthContext";
 import { AppLayout } from "../components/layout/AppLayout";
 
 interface AdminEventosPageProps {
@@ -16,6 +17,11 @@ interface AdminEventosPageProps {
 
 export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
   const hookData = useEventos();
+  const { user } = useAuth();
+
+  // El empleado puede crear eventos, pero editar y borrar son del
+  // administrador: el backend restringe PUT y DELETE a ese rol.
+  const esAdmin = ["admin", "administrador"].includes(user?.role ?? "");
 
   const eventos = props.eventos ?? hookData.eventos;
   const loading = props.loading ?? hookData.loading;
@@ -71,7 +77,11 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
   return (
     <AppLayout
       title="Gestión de Eventos"
-      subtitle="Administra, programa, modifica y elimina los eventos del complejo deportivo."
+      subtitle={
+        esAdmin
+          ? "Administra, programa, modifica y elimina los eventos del complejo deportivo."
+          : "Programa los eventos del complejo deportivo."
+      }
     >
       <div
         className="header-row"
@@ -120,8 +130,8 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
       {!loading && !error && eventos.length > 0 && (
         <TablaEventosAdmin
           eventos={eventos}
-          onEditar={handleEditar}
-          onEliminar={handleEliminar}
+          onEditar={esAdmin ? handleEditar : undefined}
+          onEliminar={esAdmin ? handleEliminar : undefined}
         />
       )}
 

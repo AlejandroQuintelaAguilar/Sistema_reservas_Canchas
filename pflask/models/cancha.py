@@ -1,4 +1,5 @@
 from extensions import db
+from sqlalchemy import Time, func
 
 
 class Cancha(db.Model):
@@ -12,6 +13,11 @@ class Cancha(db.Model):
     estado = db.Column(db.String(20), nullable=False, default="disponible")
     techada = db.Column(db.Boolean, nullable=False, default=False)
     superficie = db.Column(db.String(50))
+
+    imagen_url = db.Column(db.String(500))
+    horario_apertura = db.Column(Time)
+    horario_cierre = db.Column(Time)
+    dias_atencion = db.Column(db.String(20))
 
     id_categoria = db.Column(
         db.Integer,
@@ -47,4 +53,12 @@ class Cancha(db.Model):
             "nombre_categoria": nombre_categoria,
             "categoria": nombre_categoria,
             "id_administrador": self.id_administrador,
+            "imagen_url": self.imagen_url,
+            "horario_apertura": (
+                self.horario_apertura.strftime("%H:%M") if self.horario_apertura else None
+            ),
+            "horario_cierre": (
+                self.horario_cierre.strftime("%H:%M") if self.horario_cierre else None
+            ),
+            "dias_atencion": self.dias_atencion,
         }

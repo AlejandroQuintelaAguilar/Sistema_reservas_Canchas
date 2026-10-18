@@ -9,6 +9,7 @@ interface Cancha {
   precio_hora: number;
   techada: boolean;
   estado: string;
+  imagen_url?: string;
 }
 
 function CanchasPage() {
@@ -33,6 +34,11 @@ function CanchasPage() {
       <ul style={{ listStyleType: "none", padding: 0 }}>
         {canchas.map((c) => (
           <li key={c.id} style={{ marginBottom: "15px", padding: "10px", border: "1px solid #ccc", borderRadius: "5px" }}>
+            {c.imagen_url ? (
+              <img src={c.imagen_url} alt={c.nombre} style={{ width: "100%", height: "160px", objectFit: "cover", borderRadius: "5px", marginBottom: "10px", display: "block" }} />
+            ) : (
+              <div style={{ width: "100%", height: "160px", objectFit: "cover", borderRadius: "5px", marginBottom: "10px", display: "flex", alignItems: "center", justifyContent: "center", background: "#f0f0f0", fontSize: "2rem" }}>🏟️</div>
+            )}
             <strong>{c.nombre}</strong> — {c.deporte} — Bs {c.precio_hora}/hora
             {c.techada ? " (techada)" : ""} — Estado: {c.estado}
             <br />

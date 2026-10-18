@@ -1,15 +1,18 @@
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import { Routes, Route } from 'react-router-dom';
+import { Navigate, Routes, Route } from 'react-router-dom';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import ReservasPage from './pages/ReservasPage';
 import ReportesPage from './pages/ReportesPage';
+import AnaliticaPage from './pages/AnaliticaPage';
 import PagosPage from './pages/PagosPage.tsx';
+import NotificacionesPage from './pages/NotificacionesPage.tsx';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import UsuarioEventosPage from './pages/UsuarioEventosPage';
 import AdminEventosPage from './pages/AdminEventosPage';
+import AdminCanchasPage from './pages/AdminCanchasPage';
 import PortalPublicoPage from './pages/PortalPublicoPage';
 
 function App() {
@@ -77,10 +80,28 @@ function App() {
           <ProtectedRoute
             allowedRoles={[
               'admin',
-              'administrador'
+              'administrador',
+              'empleado'
             ]}
           >
             <AdminEventosPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* ============================================
+          CANCHAS / TARIFAS / HORARIOS (solo admin)
+          ============================================ */}
+      <Route
+        path="/admin/canchas"
+        element={
+          <ProtectedRoute
+            allowedRoles={[
+              'admin',
+              'administrador'
+            ]}
+          >
+            <AdminCanchasPage />
           </ProtectedRoute>
         }
       />
@@ -98,6 +119,40 @@ function App() {
             ]}
           >
             <ReportesPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* ============================================
+          ANALITICA DE DATOS (solo admin)
+          ============================================ */}
+      <Route
+        path="/analitica"
+        element={
+          <ProtectedRoute
+            allowedRoles={[
+              'admin',
+              'administrador'
+            ]}
+          >
+            <AnaliticaPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* ============================================
+          NOTIFICACIONES (solo admin)
+          ============================================ */}
+      <Route
+        path="/notificaciones"
+        element={
+          <ProtectedRoute
+            allowedRoles={[
+              'admin',
+              'administrador'
+            ]}
+          >
+            <NotificacionesPage />
           </ProtectedRoute>
         }
       />
@@ -148,6 +203,10 @@ function App() {
           </ProtectedRoute>
         }
       />
+
+    {/* Caja y pagos son la misma pagina. /caja queda como alias que redirige a
+          /pagos, para que los enlaces ya guardados sigan llevando al modulo. */}
+      <Route path="/caja" element={<Navigate to="/pagos" replace />} />
 
     </Routes>
   );

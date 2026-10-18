@@ -7,7 +7,18 @@ from models.cancha import Cancha
 from models.categoria import Categoria
 from models.cliente import Cliente
 from models.empleado import Empleado
-from models.pago import Pago
+from models.evento import Evento
+from models.historial_estado_cancha import HistorialEstadoCancha
+from models.historial_precio_cancha import HistorialPrecioCancha
+from models.historial_reserva import HistorialReserva
+from models.pago import (
+    ESTADO_APROBADO,
+    ESTADO_PENDIENTE,
+    ESTADO_PENDIENTE_VALIDACION,
+    METODOS_DIGITALES,
+    METODOS_PAGO_VALIDOS,
+    Pago,
+)
 from models.persona import Persona
 from models.reserva import Reserva
 from models.usuario import Usuario
@@ -15,14 +26,38 @@ from services.auth_service import hash_password
 
 HORA_APERTURA = datetime.strptime("06:00", "%H:%M").time()
 HORA_CIERRE = datetime.strptime("23:00", "%H:%M").time()
-METODOS_PAGO_VALIDOS = ("efectivo", "tarjeta", "transferencia", "qr")
 ESTADOS_VALIDOS_CANCHA = ("disponible", "mantenimiento", "fuera_servicio")
 ESTADOS_TERMINALES = ("cancelada", "completada", "expirada")
+ESTADOS_ACTIVOS = ("pendiente", "confirmada")
+MINUTOS_PARA_PAGAR = 15
+HORAS_MAX_RESERVA = 4
+DIAS_MAX_ANTICIPACION = 15
+
+# Politica de devolucion por cancelacion. El documento de requisitos no define
+# los porcentajes, asi que quedan en constantes para ajustarlos en un solo punto.
+HORAS_MINIMAS_REEMBOLSO = 1
+PORCENTAJE_REEMBOLSO_FUERA_DE_PLAZO = 1.0
+PORCENTAJE_REEMBOLSO_DENTRO_DE_PLAZO = 0.0
 
 
 # ============================================================
 # HELPERS
 # ============================================================
+def _notificar(funcion, *args, **kwargs):
+    """Encola los avisos del modulo de Notificaciones.
+
+    Un aviso nunca debe tumbar la operacion que lo dispara: si falla, se
+    avisa por consola y la reserva sigue su curso.
+    """
+    try:
+        from services import notificaciones_service
+
+        return getattr(notificaciones_service, funcion)(*args, **kwargs)
+    except Exception as ex:  # noqa: BLE001
+        print(f"[NOTIFICACION OMITIDA] {ex}")
+        return None
+
+
 def _fecha(valor, nombre="fecha"):
     try:
         return datetime.strptime(str(valor).strip(), "%Y-%m-%d").date()
@@ -55,21 +90,49 @@ def validar_horario(hora_inicio, hora_fin):
     return True, None
 
 
+def _registrar_historial(id_reserva, tipo_cambio, detalle=None, id_usuario=None):
+    db.session.add(
+        HistorialReserva(
+            id_reserva=id_reserva,
+            tipo_cambio=tipo_cambio,
+            detalle=(detalle or "").strip() or None,
+            id_usuario=id_usuario,
+            fecha=datetime.now(),
+        )
+    )
+
+
 def expirar_reservas_vencidas():
-    limite = datetime.now() - timedelta(minutes=15)
+    """Sin pago dentro de los 15 minutos la reserva pasa a EXPIRADA y libera la cancha."""
+    ahora = datetime.now()
+    # Reservas nuevas: tienen expira_en fijado al crearse.
     vencidas = Reserva.query.filter(
         Reserva.estado_reserva == "pendiente",
-        Reserva.fecha_creacion < limite,
+        Reserva.expira_en.is_not(None),
+        Reserva.expira_en < ahora,
     ).all()
-    for r in vencidas:
+    # Reservas antiguas sin expira_en: se calcula por fecha_creacion.
+    antiguas = Reserva.query.filter(
+        Reserva.estado_reserva == "pendiente",
+        Reserva.expira_en.is_(None),
+        Reserva.fecha_creacion < ahora - timedelta(minutes=MINUTOS_PARA_PAGAR),
+    ).all()
+    for r in vencidas + antiguas:
         r.estado_reserva = "expirada"
+        r.expira_en = None
         r.motivo_cancelacion = "Expirada por falta de pago (tiempo límite de 15 min)"
-    if vencidas:
+        _registrar_historial(
+            r.id_reserva,
+            "expiracion",
+            "Expirada automáticamente por falta de pago en 15 minutos",
+        )
+    if vencidas or antiguas:
         db.session.commit()
-    return len(vencidas)
+    return len(vencidas) + len(antiguas)
 
 
 def completar_reservas_pasadas():
+    """Confirmada que ya pasó su hora fin -> FINALIZADA."""
     ahora = datetime.now()
     hoy = ahora.date()
     hora_actual = ahora.time()
@@ -83,6 +146,9 @@ def completar_reservas_pasadas():
     ).all()
     for r in completadas:
         r.estado_reserva = "completada"
+        _registrar_historial(
+            r.id_reserva, "finalizacion", "Finalizada automáticamente al terminar el horario"
+        )
     if completadas:
         db.session.commit()
     return len(completadas)
@@ -103,7 +169,7 @@ def _encontrar_choque(id_cancha, fecha, hora_inicio, hora_fin, excluir_id=None):
     query = Reserva.query.filter(
         Reserva.id_cancha == id_cancha,
         Reserva.fecha_reserva == fecha,
-        ~Reserva.estado_reserva.in_(ESTADOS_TERMINALES),
+        Reserva.estado_reserva.in_(ESTADOS_ACTIVOS),
         Reserva.hora_inicio < hora_fin,
         Reserva.hora_fin > hora_inicio,
     )
@@ -112,32 +178,240 @@ def _encontrar_choque(id_cancha, fecha, hora_inicio, hora_fin, excluir_id=None):
     return query.first()
 
 
-def _validaciones_reserva(fecha_reserva, hora_inicio, hora_fin, duracion_h=None, id_cancha=None):
-    hoy = datetime.now().date()
-    dias = (fecha_reserva - hoy).days
-    if dias < 1 or dias > 15:
-        raise ValueError("La fecha debe estar entre 1 y 15 días de anticipación.")
+def _encontrar_evento(id_cancha, fecha, hora_inicio, hora_fin):
+    return Evento.query.filter(
+        Evento.id_cancha == id_cancha,
+        Evento.fecha_evento == fecha,
+        Evento.hora_inicio < hora_fin,
+        Evento.hora_fin > hora_inicio,
+    ).first()
 
-    if hora_fin <= hora_inicio:
-        raise ValueError("La hora fin debe ser mayor que la hora inicio.")
 
-    ok, err = validar_horario(hora_inicio, hora_fin)
-    if not ok:
-        raise ValueError(err)
+def _horarios_disponibles(id_cancha, fecha, duracion_h):
+    """Alternativas de horario el mismo día cuando el solicitado está ocupado."""
+    return [s["hora_inicio"] + "-" + s["hora_fin"] for s in listar_slots(id_cancha, fecha, duracion_h)]
 
+
+def listar_slots(id_cancha, fecha, duracion_h=1):
+    """Slots horarios libres de la cancha, respetando su horario de atención.
+
+    Devuelve lista de dicts: {hora_inicio, hora_fin, disponible, motivo}.
+    """
+    duracion_h = float(duracion_h or 1)
+    if duracion_h <= 0 or duracion_h > HORAS_MAX_RESERVA:
+        raise ValueError("La duración debe ser entre 1 y 4 horas.")
+
+    cancha = db.session.get(Cancha, id_cancha)
+    if not cancha:
+        raise ValueError("Cancha no encontrada.")
+    if cancha.estado != "disponible":
+        raise ValueError("La cancha no está disponible.")
+
+    # Primero se depura lo vencido/completado para no mostrar slots falsos.
+    expirar_reservas_vencidas()
+    completar_reservas_pasadas()
+
+    from services.tarifas_service import obtener_horario_dia
+
+    horario_dia = obtener_horario_dia(id_cancha, fecha.weekday())
+    if horario_dia is None:
+        return []
+    apertura, cierre = horario_dia
+    if apertura < HORA_APERTURA:
+        apertura = HORA_APERTURA
+    if cierre > HORA_CIERRE:
+        cierre = HORA_CIERRE
+
+    slots = []
+
+    actual = datetime.combine(fecha, apertura)
+    limite = datetime.combine(fecha, cierre)
+    while actual + timedelta(hours=duracion_h) <= limite:
+        h_ini = actual.time()
+        h_fin = (actual + timedelta(hours=duracion_h)).time()
+        bloqueo = _hay_bloqueo(id_cancha, fecha, h_ini, h_fin)
+        choque = _encontrar_choque(id_cancha, fecha, h_ini, h_fin)
+        evento = _encontrar_evento(id_cancha, fecha, h_ini, h_fin)
+        if bloqueo:
+            motivo = f"Bloqueada: {bloqueo.motivo}"
+        elif choque:
+            motivo = "Reservada"
+        elif evento:
+            motivo = f"Evento: {evento.nombre_evento}"
+        else:
+            motivo = None
+        monto, _partes = _desglose(cancha, fecha, h_ini, duracion_h)
+        slots.append({
+            "hora_inicio": h_ini.strftime("%H:%M"),
+            "hora_fin": h_fin.strftime("%H:%M"),
+            "disponible": motivo is None,
+            "motivo": motivo,
+            "precio_hora": _precio_slot(cancha, fecha, h_ini),
+            "monto_estimado": monto,
+        })
+        actual += timedelta(hours=1)
+    return slots
+
+
+def _precio_slot(cancha, fecha, hora_inicio):
+    from services import tarifas_service
+
+    try:
+        return tarifas_service.obtener_tarifa_hora(cancha, fecha, hora_inicio)
+    except Exception:
+        return float(cancha.precio_hora)
+
+
+def _desglose(cancha, fecha, hora_inicio, duracion_h):
+    from services import tarifas_service
+
+    return tarifas_service.desglose_monto(cancha, fecha, hora_inicio, duracion_h)
+
+
+def consultar_disponibilidad(id_cancha, fecha_valor, duracion):
+    """Endpoint público de disponibilidad para una fecha y duración."""
+    from services import tarifas_service
+
+    fecha = _fecha(fecha_valor)
+    cancha = db.session.get(Cancha, id_cancha)
+    if not cancha:
+        raise ValueError("Cancha no encontrada.")
+
+    horario_dia = tarifas_service.obtener_horario_dia(id_cancha, fecha.weekday())
+    return {
+        "id_cancha": id_cancha,
+        "cancha": cancha.nombre_cancha,
+        "fecha": str(fecha),
+        "dia_nombre": tarifas_service.DIAS[fecha.weekday()],
+        "duracion": float(duracion or 1),
+        "horario_cancha": (
+            {
+                "hora_apertura": horario_dia[0].strftime("%H:%M"),
+                "hora_cierre": horario_dia[1].strftime("%H:%M"),
+            }
+            if horario_dia
+            else None
+        ),
+        "precio_hora_base": float(cancha.precio_hora),
+        "horarios": listar_slots(id_cancha, fecha, duracion),
+    }
+
+
+def _validar_horario_cancha(cancha, fecha, hora_inicio, hora_fin):
+    """El horario debe caber dentro del horario de atención de la cancha ese día."""
+    from services.tarifas_service import obtener_horario_dia
+
+    horario = obtener_horario_dia(cancha.id_cancha, fecha.weekday())
+    if horario is None:
+        raise ValueError("La cancha no opera ese día.")
+    apertura, cierre = horario
+
+    if hora_inicio < apertura or hora_fin > cierre:
+        raise ValueError(
+            f"El horario debe estar dentro del horario de la cancha "
+            f"({apertura.strftime('%H:%M')}-{cierre.strftime('%H:%M')})."
+        )
+
+
+def _dias_habiles(cancha, fecha):
+    """None = todos los días. Lista de ints (0=lunes) = días de atención."""
+    from services.tarifas_service import obtener_horario_dia
+
+    dias = []
+    for dia in range(7):
+        if obtener_horario_dia(cancha.id_cancha, dia) is not None:
+            dias.append(dia)
+    return dias or None
+
+
+def _validaciones_reserva(fecha_reserva, hora_inicio, hora_fin, duracion_h=None, id_cancha=None, excluir_id=None):
+    """VALIDACIONES EN ORDEN (documento de lógica de negocio).
+
+    1. La cancha está Disponible.
+    2. La fecha está entre 1 y 15 días de anticipación.
+    3. La duración es de 1 a 4 horas.
+    4. El horario está dentro del horario de atención y del horario de la cancha.
+    5. No hay solapamiento con reservas activas, bloqueos ni eventos.
+    """
+    # --- 1. La cancha está DISPONIBLE ---
     if id_cancha is not None:
         cancha = db.session.get(Cancha, id_cancha)
         if not cancha:
             raise ValueError("Cancha no encontrada.")
-        if cancha.estado == "fuera_servicio":
-            raise ValueError("La cancha está fuera de servicio.")
+        if cancha.estado != "disponible":
+            raise ValueError(
+                "La cancha no está disponible "
+                f"(estado actual: {cancha.estado.replace('_', ' ')})."
+            )
+    else:
+        cancha = None
+
+    # --- 2. Fecha entre 1 y 15 días de anticipación ---
+    hoy = datetime.now().date()
+    dias = (fecha_reserva - hoy).days
+    if dias < 1 or dias > DIAS_MAX_ANTICIPACION:
+        raise ValueError("La fecha debe estar entre 1 y 15 días de anticipación.")
+
+    # --- 3. Duración entre 1 y 4 horas ---
+    if duracion_h is not None:
+        if duracion_h <= 0 or duracion_h > HORAS_MAX_RESERVA:
+            raise ValueError("La duración debe ser entre 1 y 4 horas.")
+    if hora_fin <= hora_inicio:
+        raise ValueError("La hora fin debe ser mayor que la hora inicio.")
+
+    # --- 4. Horario de atención (06:00-23:00) y horario de la cancha ---
+    ok, err = validar_horario(hora_inicio, hora_fin)
+    if not ok:
+        raise ValueError(err)
+    if cancha is not None:
+        _validar_horario_cancha(cancha, fecha_reserva, hora_inicio, hora_fin)
+
+    # --- 5. Sin solapamiento con reservas activas, bloqueos ni eventos ---
+    if id_cancha is not None:
         bloqueo = _hay_bloqueo(id_cancha, fecha_reserva, hora_inicio, hora_fin)
         if bloqueo:
             raise ValueError(f"La cancha está bloqueada: {bloqueo.motivo}")
-        if _encontrar_choque(id_cancha, fecha_reserva, hora_inicio, hora_fin):
-            raise ValueError("La cancha no está disponible en ese horario.")
+        evento = _encontrar_evento(id_cancha, fecha_reserva, hora_inicio, hora_fin)
+        if evento:
+            raise ValueError(
+                f"La cancha tiene el evento '{evento.nombre_evento}' en ese horario."
+            )
+        choque = _encontrar_choque(
+            id_cancha, fecha_reserva, hora_inicio, hora_fin, excluir_id=excluir_id
+        )
+        if choque:
+            alternativas = _horarios_disponibles(id_cancha, fecha_reserva, duracion_h)
+            mensaje = "La cancha no está disponible en ese horario."
+            if alternativas:
+                mensaje += f" Horarios libres: {', '.join(alternativas[:4])}."
+            raise ValueError(mensaje)
         return cancha
     return None
+
+
+def _tarifa_aplicable(cancha, fecha, hora_inicio):
+    """Precio por hora aplicable a esa franja.
+
+    Prioridad: fin de semana > nocturna > normal; dentro de una franja gana la
+    más específica (día concreto y ventana más estrecha). Si la cancha no tiene
+    tarifas configuradas, cae a su precio_hora.
+    """
+    from services import tarifas_service
+
+    return tarifas_service.obtener_tarifa_hora(cancha, fecha, hora_inicio)
+
+
+def _calcular_monto(cancha, fecha, hora_inicio, duracion_h):
+    """Monto = duración x tarifa aplicable (normal, nocturna o fin de semana).
+
+    Si la reserva cruza de una franja a otra, cada hora se cobra a su tarifa.
+    """
+    if duracion_h is None or duracion_h <= 0:
+        raise ValueError("La duración debe ser entre 1 y 4 horas.")
+    from services import tarifas_service
+
+    total, _partes = tarifas_service.desglose_monto(cancha, fecha, hora_inicio, duracion_h)
+    return total
 
 
 def _calcular_duracion(fecha_reserva, hora_inicio, datos, duracion_h=None, hora_fin=None):
@@ -180,6 +454,20 @@ def crear_reserva(datos, current_user=None):
     if duracion_h <= 0 or duracion_h > 4:
         raise ValueError("La duración debe ser entre 1 y 4 horas.")
 
+    # El cliente debe decidir como paga ANTES de reservar. Como el complejo esta
+    # cerrado no hay ventanilla, asi que el efectivo queda descartado y solo se
+    # aceptan metodos digitales.
+    metodo_pago = (datos.get("metodo_pago") or "").strip().lower()
+    if metodo_pago == "efectivo":
+        raise ValueError(
+            "No se puede reservar con efectivo porque el complejo de canchas está "
+            "cerrado. Elige QR, transferencia o tarjeta."
+        )
+    if metodo_pago not in METODOS_DIGITALES:
+        raise ValueError(
+            "Elige un método de pago válido para reservar: QR, transferencia o tarjeta."
+        )
+
     id_cliente = datos.get("id_cliente")
     if id_cliente in (None, ""):
         if current_user is not None:
@@ -198,6 +486,10 @@ def crear_reserva(datos, current_user=None):
 
     cancha = _validaciones_reserva(fecha_reserva, hora_inicio, hora_fin, duracion_h, id_cancha)
 
+    # El monto se guarda COPIADO en la reserva (RNF-05): cambios futuros de
+    # tarifa o precio no alteran esta reserva ni sus pagos.
+    monto_total = _calcular_monto(cancha, fecha_reserva, hora_inicio, duracion_h)
+
     nueva = Reserva(
         fecha_reserva=fecha_reserva,
         hora_inicio=hora_inicio,
@@ -206,25 +498,55 @@ def crear_reserva(datos, current_user=None):
         estado_reserva="pendiente",
         id_cliente=id_cliente,
         id_cancha=id_cancha,
+        monto_total=monto_total,
+        expira_en=datetime.now() + timedelta(minutes=MINUTOS_PARA_PAGAR),
+        canal_origen="web",
     )
     db.session.add(nueva)
+    db.session.flush()
+
+    _registrar_historial(
+        nueva.id_reserva,
+        "creacion",
+        f"Reserva creada para {fecha_reserva} {hora_inicio.strftime('%H:%M')}-"
+        f"{hora_fin.strftime('%H:%M')}, monto {monto_total}",
+        id_usuario=getattr(current_user, "id_usuario", None),
+    )
     db.session.commit()
     db.session.refresh(nueva)
+    # Aviso al administrador de la nueva reserva.
+    _notificar("avisar_administradores", "nueva_reserva", nueva)
 
-    monto_total = (
-        float(nueva.monto_total)
-        if nueva.monto_total is not None
-        else float(cancha.precio_hora) * duracion_h
-    )
     return {
         "mensaje": "Reserva creada. Tienes 15 minutos para pagar antes de que expire.",
         "id_reserva": nueva.id_reserva,
         "monto_total": monto_total,
+        "metodo_pago": metodo_pago,
         "estado": "pendiente",
+        "expira_en": nueva.expira_en.isoformat() if nueva.expira_en else None,
+        "desglose": _desglose(cancha, fecha_reserva, hora_inicio, duracion_h)[1],
     }
 
 
-def crear_reserva_presencial(datos):
+def _cancelar_reserva_sin_pago(reserva, motivo, id_usuario=None):
+    """Cancela una reserva ya confirmada cuyo pago nunca llego a registrarse.
+
+    El modulo de Pagos trabaja con su propia transaccion, asi que un fallo ahi
+    no puede deshacer el commit de la reserva. Cancelarla libera el horario y
+    deja el motivo en el historial, en lugar de un pendiente sin pago.
+    """
+    reserva.estado_reserva = "cancelada"
+    reserva.motivo_cancelacion = motivo
+    _registrar_historial(
+        reserva.id_reserva,
+        "cancelada_pago_fallido",
+        motivo,
+        id_usuario=id_usuario,
+    )
+    db.session.commit()
+
+
+def crear_reserva_presencial(datos, current_user=None):
     expirar_reservas_vencidas()
     completar_reservas_pasadas()
 
@@ -264,39 +586,85 @@ def crear_reserva_presencial(datos):
 
     cancha = _validaciones_reserva(fecha_reserva, hora_inicio, hora_fin, duracion_h, id_cancha)
 
+    monto_total = _calcular_monto(cancha, fecha_reserva, hora_inicio, duracion_h)
+
+    # El pago se registra por el modulo de Pagos: aplica turno de caja, saldo,
+    # idempotencia y auditoria. Se importa aca para evitar dependencia circular.
+    from services import pagos_service
+
+    # El efectivo exige turno de caja abierto. Se valida ANTES de insertar la
+    # reserva: si se comprobara despues, el fallo dejaria la reserva ya
+    # confirmada en la base y sin pago, porque el commit siguiente no lo puede
+    # deshacer un rollback.
+    turno = None
+    if metodo == "efectivo":
+        if id_empleado in (None, ""):
+            raise ValueError("El pago en efectivo requiere el empleado que lo recibe.")
+        turno = pagos_service.turno_abierto_del_empleado(int(id_empleado))
+        if not turno:
+            raise ValueError("El empleado no tiene un turno de caja abierto.")
+
     nueva = Reserva(
         fecha_reserva=fecha_reserva,
         hora_inicio=hora_inicio,
         hora_fin=hora_fin,
         duracion=timedelta(hours=duracion_h),
-        estado_reserva="confirmada",
+        estado_reserva="pendiente",
         id_cliente=id_cliente,
         id_cancha=id_cancha,
+        monto_total=monto_total,
+        canal_origen="presencial",
     )
     db.session.add(nueva)
     db.session.flush()
 
-    monto_total = (
-        float(nueva.monto_total)
-        if nueva.monto_total is not None
-        else float(cancha.precio_hora) * duracion_h
+    _registrar_historial(
+        nueva.id_reserva,
+        "creacion_presencial",
+        f"Reserva presencial por {monto_total}",
+        id_usuario=getattr(current_user, "id_usuario", None),
     )
-
-    pago = Pago(
-        metodo_pago=metodo,
-        estado_pago="pagado",
-        monto=monto_total,
-        id_reserva=nueva.id_reserva,
-        id_empleado=int(id_empleado) if id_empleado not in (None, "") else None,
-    )
-    db.session.add(pago)
     db.session.commit()
 
-    return {
-        "mensaje": "Reserva presencial creada y confirmada.",
+    # La reserva se confirma sola si el saldo llega a 0 y el pago queda aprobado.
+    datos_pago = {
         "id_reserva": nueva.id_reserva,
+        "metodo_pago": metodo,
+        "monto": monto_total,
+        "id_empleado": int(id_empleado) if id_empleado not in (None, "") else None,
+    }
+    id_usuario = getattr(current_user, "id_usuario", None)
+
+    # El modulo de Pagos confirma su propia transaccion: a partir de este punto
+    # la reserva ya esta escrita en la base. Si el pago no llega a existir por
+    # otra causa (saldo, comprobante repetido, idempotencia) la reserva se
+    # cancela en vez de quedar pendiente y sin pago.
+    try:
+        if metodo == "efectivo":
+            datos_pago["id_turno"] = turno.id_turno
+            pago = pagos_service.registrar_pago_efectivo(datos_pago, id_usuario)["pago"]
+        else:
+            # El empleado esta presente: registra el comprobante y lo aprueba.
+            pago = pagos_service.registrar_comprobante(datos_pago, None, id_usuario)["pago"]
+            if pago["estado_pago"] == ESTADO_PENDIENTE_VALIDACION:
+                pago = pagos_service.aprobar_pago(
+                    pago["id_pago"], id_usuario, "Validado en ventanilla por el empleado."
+                )["pago"]
+    except Exception as exc:
+        _cancelar_reserva_sin_pago(nueva, f"Pago no registrado: {exc}", id_usuario)
+        raise
+
+    return {
+        "mensaje": (
+            "Reserva presencial creada y confirmada."
+            if pago["estado_pago"] == ESTADO_APROBADO
+            else "Reserva presencial creada. El pago queda pendiente de validación."
+        ),
+        "id_reserva": nueva.id_reserva,
+        "id_pago": pago["id_pago"],
         "monto_total": monto_total,
-        "estado": "confirmada",
+        "estado": pago.get("estado_reserva") or nueva.estado_reserva,
+        "estado_pago": pago["estado_pago"],
         "metodo_pago": metodo,
     }
 
@@ -312,6 +680,9 @@ def _formato_cliente(reserva, cancha):
         "duracion": str(reserva.duracion) if reserva.duracion else None,
         "estado": reserva.estado_reserva,
         "precio_hora": float(cancha.precio_hora),
+        "monto_total": float(reserva.monto_total) if reserva.monto_total is not None else None,
+        "expira_en": reserva.expira_en.isoformat() if reserva.expira_en else None,
+        "canal_origen": reserva.canal_origen,
         "motivo_cancelacion": reserva.motivo_cancelacion,
     }
 
@@ -366,7 +737,29 @@ def listar_reservas_historial(id_cliente):
     ]
 
 
-def cancelar_reserva(id_reserva, motivo=None):
+def _calcular_reembolso(reserva):
+    """Regla de devolucion: 100% con mas de 1h de anticipacion, 0% dentro de la hora.
+
+    El documento deja los porcentajes open (inconsistencia #3). Se aplica la
+    regla conservadora ya usada antes del modulo de Pagos y se parametriza
+    aqui para poder cambiarla sin tocar el flujo.
+    """
+    pagos = Pago.query.filter(
+        Pago.id_reserva == reserva.id_reserva,
+        Pago.estado_pago == ESTADO_APROBADO,
+    ).all()
+    if not pagos:
+        return 0.0, 0.0
+    total_pagado = round(sum(float(p.monto) for p in pagos), 2)
+    fecha_hora = datetime.combine(reserva.fecha_reserva, reserva.hora_inicio)
+    if datetime.now() > (fecha_hora - timedelta(hours=HORAS_MINIMAS_REEMBOLSO)):
+        return total_pagado, 0.0
+    return total_pagado, round(total_pagado * PORCENTAJE_REEMBOLSO_FUERA_DE_PLAZO, 2)
+
+
+def cancelar_reserva(id_reserva, motivo=None, id_usuario=None):
+    from services import pagos_service
+
     expirar_reservas_vencidas()
     completar_reservas_pasadas()
 
@@ -377,25 +770,85 @@ def cancelar_reserva(id_reserva, motivo=None):
         raise ValueError(f"No se puede cancelar una reserva en estado '{reserva.estado_reserva}'.")
 
     fecha_hora = datetime.combine(reserva.fecha_reserva, reserva.hora_inicio)
-    if datetime.now() > (fecha_hora - timedelta(hours=1)):
-        raise ValueError("Solo se puede cancelar hasta 1 hora antes de la reserva.")
+    if datetime.now() > (fecha_hora - timedelta(hours=HORAS_MINIMAS_REEMBOLSO)):
+        raise ValueError(
+            f"Solo se puede cancelar hasta {HORAS_MINIMAS_REEMBOLSO} hora(s) antes "
+            "de la reserva."
+        )
+
+    total_pagado, a_reembolsar = _calcular_reembolso(reserva)
+    pagos_aprobados = Pago.query.filter(
+        Pago.id_reserva == id_reserva, Pago.estado_pago == ESTADO_APROBADO
+    ).all()
+
+    # La devolucion pasa por el modulo de Pagos: se crea la solicitud y la
+    # aprueba el empleado desde la caja. No se cambia el estado del pago aqui.
+    solicitudes = 0
+    if a_reembolsar > 0:
+        restante = a_reembolsar
+        for pago in pagos_aprobados:
+            if restante <= 0:
+                break
+            a_devolver = min(restante, float(pago.saldo_restante))
+            if a_devolver <= 0:
+                continue
+            pagos_service._preparar_solicitud_devolucion(
+                pago.id_pago,
+                motivo or "Cancelación de la reserva",
+                a_devolver,
+            )
+            pagos_service._historial_reserva(
+                id_reserva,
+                "devolucion_solicitada",
+                f"Devolución de Bs {a_devolver} por cancelación de la reserva.",
+                id_usuario,
+            )
+            restante = round(restante - a_devolver, 2)
+            solicitudes += 1
 
     reserva.estado_reserva = "cancelada"
     reserva.motivo_cancelacion = motivo or "Cancelada por el cliente"
 
-    pago = Pago.query.filter_by(id_reserva=id_reserva, estado_pago="pagado").first()
-    if pago:
-        pago.estado_pago = "reembolsado"
-
+    _registrar_historial(
+        id_reserva,
+        "cancelacion_cliente",
+        f"Cancelada por el cliente. Motivo: {reserva.motivo_cancelacion}. "
+        f"Reembolso: {a_reembolsar} de {total_pagado}",
+        id_usuario=id_usuario,
+    )
     db.session.commit()
+    # Avisos de cancelacion: al cliente y a los administradores.
+    _notificar("avisar_cancelacion", reserva)
+    _notificar("avisar_administradores", "nueva_cancelacion", reserva)
+
+    if solicitudes:
+        mensaje = (
+            f"Reserva cancelada. Se registraron {solicitudes} solicitud(es) de "
+            "devolución por Bs " + str(a_reembolsar) + ", pendientes de aprobación."
+        )
+    else:
+        mensaje = "Reserva cancelada. No había pagos aprobados por devolver."
+
     return {
-        "mensaje": "Reserva cancelada exitosamente. Si realizó un pago, el reembolso ha sido procesado.",
+        "mensaje": mensaje,
         "id_reserva": reserva.id_reserva,
         "estado": "cancelada",
+        "total_pagado": total_pagado,
+        "monto_reembolsable": a_reembolsar,
+        "solicitudes_devolucion": solicitudes,
     }
 
 
-def pagar_reserva(id_reserva, metodo):
+def pagar_reserva(id_reserva, metodo, id_usuario=None, referencia=None):
+    """Registra el pago de una reserva pendiente.
+
+    El flujo real vive en pagos_service (saldo, idempotencia, estados). Aqui
+    solo se resuelve la reserva: efectivo se aprueba de inmediato, mientras que
+    QR o transferencia quedan pendientes de validacion del empleado. La reserva
+    pasa a Confirmada unicamente cuando el saldo llega a 0.
+    """
+    from services import pagos_service
+
     expirar_reservas_vencidas()
     completar_reservas_pasadas()
 
@@ -406,38 +859,68 @@ def pagar_reserva(id_reserva, metodo):
         raise ValueError(
             f"La reserva no está pendiente de pago (estado actual: '{reserva.estado_reserva}')."
         )
+    if reserva.expira_en and datetime.now() > reserva.expira_en:
+        reserva.estado_reserva = "expirada"
+        reserva.motivo_cancelacion = "Expirada por falta de pago (tiempo límite de 15 min)"
+        db.session.commit()
+        raise ValueError("La reserva expiró por falta de pago. Vuelve a reservar el horario.")
 
     metodo = (metodo or "").strip().lower()
     if metodo not in METODOS_PAGO_VALIDOS:
         raise ValueError("Método de pago inválido.")
 
-    cancha = db.session.get(Cancha, reserva.id_cancha)
-    if not cancha:
-        raise ValueError("La cancha de la reserva no existe.")
+    saldo = pagos_service.saldo_reserva(id_reserva)
+    if saldo <= 0:
+        raise ValueError("Esta reserva ya no tiene saldo pendiente.")
 
-    if reserva.monto_total is not None:
-        monto = float(reserva.monto_total)
-    else:
-        horas = reserva.duracion.total_seconds() / 3600 if reserva.duracion else 1
-        monto = float(cancha.precio_hora) * horas
-
-    pago = Pago(
-        metodo_pago=metodo,
-        estado_pago="pagado",
-        monto=monto,
-        id_reserva=id_reserva,
-    )
-    db.session.add(pago)
-    reserva.estado_reserva = "confirmada"
-    db.session.commit()
-
-    return {
-        "mensaje": "Pago registrado. Reserva confirmada.",
-        "id_pago": pago.id_pago,
-        "id_reserva": reserva.id_reserva,
-        "monto_pagado": monto,
+    datos = {
+        "id_reserva": id_reserva,
         "metodo_pago": metodo,
-        "estado_reserva": "confirmada",
+        "monto": saldo,
+        "referencia": referencia,
+    }
+
+    if metodo == "efectivo":
+        # El efectivo en ventanilla lo registra el empleado con su turno.
+        from models.empleado import Empleado as _Empleado
+
+        empleado = _Empleado.query.filter_by(id_usuario=id_usuario).first() if id_usuario else None
+        if not empleado:
+            raise ValueError(
+                "El pago en efectivo lo registra un empleado con su turno de caja abierto."
+            )
+        from services.pagos_service import turno_abierto_del_empleado
+
+        turno = turno_abierto_del_empleado(empleado.id_empleado)
+        if not turno:
+            raise ValueError("No tienes un turno de caja abierto para registrar efectivo.")
+        datos["id_empleado"] = empleado.id_empleado
+        datos["id_turno"] = turno.id_turno
+        resultado = pagos_service.registrar_pago_efectivo(datos, id_usuario)
+    else:
+        # QR o transferencia sin comprobante: queda pendiente de validacion.
+        resultado = pagos_service.registrar_comprobante(datos, None, id_usuario)
+
+    pago = resultado["pago"]
+    saldo_final = resultado.get("saldo_reserva", pagos_service.saldo_reserva(id_reserva))
+    estado = resultado.get("estado_reserva") or reserva.estado_reserva
+
+    mensajes = {
+        "confirmada": "Pago registrado. Reserva confirmada.",
+        "pendiente_validacion": (
+            "Comprobante recibido. La reserva se confirma cuando el empleado "
+            "apruebe el pago."
+        ),
+    }
+    return {
+        "mensaje": mensajes.get(pago["estado_pago"], "Pago registrado."),
+        "id_pago": pago["id_pago"],
+        "id_reserva": id_reserva,
+        "monto_pagado": pago["monto"],
+        "saldo_pendiente": saldo_final,
+        "metodo_pago": metodo,
+        "estado_pago": pago["estado_pago"],
+        "estado_reserva": estado,
     }
 
 
@@ -482,13 +965,19 @@ def listar_reservas_admin(fecha=None, estado=None, id_cancha=None):
             "hora_fin": str(r.hora_fin)[:5],
             "duracion": str(r.duracion) if r.duracion else None,
             "estado": r.estado_reserva,
+            "monto_total": float(r.monto_total) if r.monto_total is not None else None,
+            "expira_en": r.expira_en.isoformat() if r.expira_en else None,
+            "canal_origen": r.canal_origen,
             "motivo_cancelacion": r.motivo_cancelacion,
         }
         for r, c, cl, p in rows
     ]
 
 
-def cancelar_reserva_admin(id_reserva, motivo=None):
+def cancelar_reserva_admin(id_reserva, motivo=None, id_usuario=None):
+    """Cancelacion administrativa: genera las devoluciones por el flujo de Pagos."""
+    from services import pagos_service
+
     expirar_reservas_vencidas()
     completar_reservas_pasadas()
 
@@ -498,22 +987,62 @@ def cancelar_reserva_admin(id_reserva, motivo=None):
     if reserva.estado_reserva in ESTADOS_TERMINALES:
         raise ValueError(f"No se puede cancelar una reserva en estado '{reserva.estado_reserva}'.")
 
+    pagos_aprobados = Pago.query.filter(
+        Pago.id_reserva == id_reserva, Pago.estado_pago == ESTADO_APROBADO
+    ).all()
+    total_pagado = round(sum(float(p.monto) for p in pagos_aprobados), 2)
+
+    solicitudes = 0
+    for pago in pagos_aprobados:
+        a_devolver = float(pago.saldo_restante)
+        if a_devolver <= 0:
+            continue
+        pagos_service._preparar_solicitud_devolucion(
+            pago.id_pago,
+            motivo or "Cancelación administrativa",
+            a_devolver,
+        )
+        pagos_service._historial_reserva(
+            id_reserva,
+            "devolucion_solicitada",
+            f"Devolución de Bs {a_devolver} por cancelación administrativa.",
+            id_usuario,
+        )
+        solicitudes += 1
+
     reserva.estado_reserva = "cancelada"
     reserva.motivo_cancelacion = motivo or "Cancelada por administración"
 
-    pago = Pago.query.filter_by(id_reserva=id_reserva, estado_pago="pagado").first()
-    if pago:
-        pago.estado_pago = "reembolsado"
-
+    _registrar_historial(
+        id_reserva,
+        "cancelacion_admin",
+        f"Cancelada por administración. Motivo: {reserva.motivo_cancelacion}. "
+        f"Pago aprobado por devolver: {total_pagado}",
+        id_usuario=id_usuario,
+    )
     db.session.commit()
+    # Avisos de cancelacion: al cliente y a los administradores.
+    _notificar("avisar_cancelacion", reserva)
+    _notificar("avisar_administradores", "nueva_cancelacion", reserva)
+
     return {
-        "mensaje": "Reserva cancelada por administración.",
+        "mensaje": (
+            "Reserva cancelada por administración. "
+            + f"Se registraron {solicitudes} solicitud(es) de devolución."
+        ),
         "id_reserva": reserva.id_reserva,
         "motivo": reserva.motivo_cancelacion,
+        "total_pagado": total_pagado,
+        "solicitudes_devolucion": solicitudes,
     }
 
 
-def modificar_reserva_admin(id_reserva, datos):
+def modificar_reserva_admin(id_reserva, datos, id_usuario=None):
+    """Modificar (empleado/admin): solo Confirmadas o Pendientes y futuras.
+
+    Revalida todas las reglas y recalcula el monto, generando la diferencia
+    a pagar o devolver.
+    """
     expirar_reservas_vencidas()
     completar_reservas_pasadas()
 
@@ -523,6 +1052,11 @@ def modificar_reserva_admin(id_reserva, datos):
     if reserva.estado_reserva in ESTADOS_TERMINALES:
         raise ValueError(f"No se puede modificar una reserva en estado '{reserva.estado_reserva}'.")
 
+    # Solo futuras.
+    hoy = datetime.now().date()
+    if reserva.fecha_reserva < hoy:
+        raise ValueError("Solo se pueden modificar reservas futuras.")
+
     try:
         id_cancha = int(datos.get("id_cancha", reserva.id_cancha))
     except (TypeError, ValueError):
@@ -530,51 +1064,59 @@ def modificar_reserva_admin(id_reserva, datos):
 
     nueva_fecha = _fecha(datos.get("fecha_reserva"))
     nueva_hora = _hora(datos.get("hora_inicio"))
-    nueva_duracion = float(datos.get("duracion", 1))
-    if nueva_duracion < 1 or nueva_duracion > 4:
+
+    duracion_h = None
+    if datos.get("duracion") not in (None, ""):
+        duracion_h = float(datos["duracion"])
+    nueva_hora_fin, duracion_h = _calcular_duracion(nueva_fecha, nueva_hora, datos, duracion_h)
+    if duracion_h <= 0 or duracion_h > HORAS_MAX_RESERVA:
         raise ValueError("La duración debe ser entre 1 y 4 horas.")
-    nueva_hora_fin = (
-        datetime.combine(nueva_fecha, nueva_hora) + timedelta(hours=nueva_duracion)
-    ).time()
 
-    hoy = datetime.now().date()
-    dias = (nueva_fecha - hoy).days
-    if dias < 1 or dias > 15:
-        raise ValueError("La nueva fecha debe estar entre 1 y 15 días de anticipación.")
-    if nueva_hora_fin <= nueva_hora:
-        raise ValueError("La hora fin debe ser mayor que la hora inicio.")
+    # Revalida TODO el conjunto de reglas de negocio, excluyendo esta reserva.
+    cancha_nueva = _validaciones_reserva(
+        nueva_fecha, nueva_hora, nueva_hora_fin, duracion_h, id_cancha,
+        excluir_id=id_reserva,
+    )
 
-    ok, err = validar_horario(nueva_hora, nueva_hora_fin)
-    if not ok:
-        raise ValueError(err)
+    monto_anterior = float(reserva.monto_total) if reserva.monto_total is not None else 0.0
+    nuevo_monto = _calcular_monto(cancha_nueva, nueva_fecha, nueva_hora, duracion_h)
+    diferencia = round(nuevo_monto - monto_anterior, 2)
 
-    cancha_nueva = db.session.get(Cancha, id_cancha)
-    if not cancha_nueva:
-        raise ValueError("Cancha no encontrada.")
-
-    bloqueo = _hay_bloqueo(id_cancha, nueva_fecha, nueva_hora, nueva_hora_fin)
-    if bloqueo:
-        raise ValueError(f"La cancha está bloqueada: {bloqueo.motivo}")
-
-    choque = _encontrar_choque(id_cancha, nueva_fecha, nueva_hora, nueva_hora_fin, excluir_id=id_reserva)
-    if choque:
-        raise ValueError("La cancha no está disponible en el nuevo horario.")
+    # Se capturan los valores previos para el historial antes de sobrescribir.
+    detalle = (
+        f"Cancha {reserva.id_cancha}->{id_cancha}, "
+        f"fecha {reserva.fecha_reserva}->{nueva_fecha}, "
+        f"hora {str(reserva.hora_inicio)[:5]}->{nueva_hora.strftime('%H:%M')}, "
+        f"monto {monto_anterior}->{nuevo_monto}"
+    )
 
     reserva.id_cancha = id_cancha
     reserva.fecha_reserva = nueva_fecha
     reserva.hora_inicio = nueva_hora
     reserva.hora_fin = nueva_hora_fin
-    reserva.duracion = timedelta(hours=nueva_duracion)
-
-    nuevo_monto = float(cancha_nueva.precio_hora) * nueva_duracion
+    reserva.duracion = timedelta(hours=duracion_h)
     reserva.monto_total = nuevo_monto
+    if reserva.estado_reserva == "pendiente" and reserva.expira_en and datetime.now() > reserva.expira_en:
+        reserva.estado_reserva = "expirada"
+    elif reserva.estado_reserva == "pendiente":
+        # La modification reactiva el límite de pago de una reserva pendiente.
+        reserva.expira_en = datetime.now() + timedelta(minutes=MINUTOS_PARA_PAGAR)
 
+    _registrar_historial(id_reserva, "modificacion", detalle, id_usuario=id_usuario)
     db.session.commit()
+    # Avisos de modificacion: al cliente y a los administradores.
+    if reserva.estado_reserva in ESTADOS_ACTIVOS:
+        _notificar("avisar_modificacion", reserva)
+        _notificar("avisar_administradores", "nueva_modificacion", reserva)
 
     return {
         "mensaje": "Reserva modificada exitosamente",
         "id_reserva": reserva.id_reserva,
+        "monto_anterior": monto_anterior,
         "nuevo_monto": nuevo_monto,
+        "diferencia": diferencia,
+        "a_pagar": diferencia if diferencia > 0 else 0.0,
+        "a_devolver": abs(diferencia) if diferencia < 0 else 0.0,
         "nueva_fecha": str(reserva.fecha_reserva),
         "nueva_hora_inicio": str(reserva.hora_inicio)[:5],
         "nueva_hora_fin": str(reserva.hora_fin)[:5],
@@ -673,6 +1215,29 @@ def crear_cliente(datos):
 
 
 # ============================================================
+# HISTORIAL DE RESERVAS
+# ============================================================
+def listar_historial_reserva(id_reserva):
+    """Historial de auditoría de una reserva (solo staff)."""
+    if not db.session.get(Reserva, id_reserva):
+        raise ValueError("Reserva no encontrada.")
+    registros = HistorialReserva.query.filter_by(id_reserva=id_reserva).order_by(
+        HistorialReserva.id_historial.asc()
+    ).all()
+    return [
+        {
+            "id_historial": h.id_historial,
+            "fecha": h.fecha.isoformat() if h.fecha else None,
+            "tipo": h.tipo_cambio,
+            "tipo_cambio": h.tipo_cambio,
+            "detalle": h.detalle,
+            "id_usuario": h.id_usuario,
+        }
+        for h in registros
+    ]
+
+
+# ============================================================
 # BLOQUEOS
 # ============================================================
 def listar_bloqueos(activos_only=True):
@@ -699,15 +1264,15 @@ def listar_bloqueos(activos_only=True):
     ]
 
 
-def crear_bloqueo(datos):
+def crear_bloqueo(datos, id_usuario=None):
     try:
         id_cancha = int(datos["id_cancha"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("id_cancha es obligatorio.")
-    try:
-        id_administrador = int(datos["id_administrador"])
-    except (KeyError, TypeError, ValueError):
-        raise ValueError("id_administrador es obligatorio.")
+    # El id_administrador se toma del usuario autenticado (no del body).
+    if id_usuario is None:
+        raise ValueError("No se pudo determinar el administrador autenticado.")
+    id_administrador = int(id_usuario)
 
     fecha_inicio = _fecha(datos.get("fecha_inicio"), "fecha_inicio")
     fecha_fin = _fecha(datos.get("fecha_fin"), "fecha_fin")
@@ -759,7 +1324,39 @@ def eliminar_bloqueo(id_bloqueo):
 # ============================================================
 # CRUD CANCHAS (ADMIN)
 # ============================================================
-def admin_crear_cancha(datos):
+def _registrar_cambio_estado_cancha(cancha, nuevo_estado, motivo=None, id_usuario=None):
+    anterior = cancha.estado
+    if anterior == nuevo_estado:
+        return
+    db.session.add(
+        HistorialEstadoCancha(
+            id_cancha=cancha.id_cancha,
+            estado_anterior=anterior,
+            estado_nuevo=nuevo_estado,
+            motivo=(motivo or "").strip()[:300] or None,
+            id_usuario=id_usuario,
+            fecha=datetime.now(),
+        )
+    )
+
+
+def _registrar_cambio_precio_cancha(cancha, nuevo_precio, id_usuario=None):
+    anterior = float(cancha.precio_hora)
+    nuevo = float(nuevo_precio)
+    if anterior == nuevo:
+        return
+    db.session.add(
+        HistorialPrecioCancha(
+            id_cancha=cancha.id_cancha,
+            precio_anterior=anterior,
+            precio_nuevo=nuevo,
+            id_usuario=id_usuario,
+            fecha=datetime.now(),
+        )
+    )
+
+
+def admin_crear_cancha(datos, id_usuario=None):
     nombre = (datos.get("nombre_cancha") or "").strip()
     tipo_deporte = (datos.get("tipo_deporte") or "").strip()
     precio = datos.get("precio_hora")
@@ -777,19 +1374,17 @@ def admin_crear_cancha(datos):
         id_categoria = int(datos["id_categoria"])
     except (KeyError, TypeError, ValueError):
         raise ValueError("id_categoria es obligatorio.")
-    try:
-        id_administrador = int(datos["id_administrador"])
-    except (KeyError, TypeError, ValueError):
-        raise ValueError("id_administrador es obligatorio.")
+    if id_usuario is None:
+        raise ValueError("No se pudo determinar el administrador autenticado.")
+    id_administrador = int(id_usuario)
 
     if not db.session.get(Categoria, id_categoria):
         raise ValueError("Categoría no encontrada.")
     if not db.session.get(Administrador, id_administrador):
         raise ValueError("El administrador indicado no existe.")
 
-    estado = str(datos.get("estado") or "disponible").strip().lower()
-    if estado not in ESTADOS_VALIDOS_CANCHA:
-        raise ValueError("Estado inválido. Use: disponible, mantenimiento o fuera_servicio.")
+    # Estado inicial SIEMPRE DISPONIBLE según la lógica de negocio.
+    estado = "disponible"
 
     nueva = Cancha(
         nombre_cancha=nombre,
@@ -801,6 +1396,7 @@ def admin_crear_cancha(datos):
         estado=estado,
         id_categoria=id_categoria,
         id_administrador=id_administrador,
+        imagen_url=(datos.get("imagen_url") or "").strip() or None,
     )
     db.session.add(nueva)
     db.session.commit()
@@ -808,7 +1404,7 @@ def admin_crear_cancha(datos):
     return {"mensaje": "Cancha creada exitosamente", "id_cancha": nueva.id_cancha}
 
 
-def admin_editar_cancha(id_cancha, datos):
+def admin_editar_cancha(id_cancha, datos, id_usuario=None):
     cancha = db.session.get(Cancha, id_cancha)
     if not cancha:
         raise ValueError("Cancha no encontrada.")
@@ -829,6 +1425,7 @@ def admin_editar_cancha(id_cancha, datos):
         precio = float(datos["precio_hora"])
         if precio <= 0:
             raise ValueError("El precio por hora debe ser mayor a 0.")
+        _registrar_cambio_precio_cancha(cancha, precio, id_usuario)
         cancha.precio_hora = precio
 
     if "techada" in datos:
@@ -844,6 +1441,7 @@ def admin_editar_cancha(id_cancha, datos):
         estado = str(datos["estado"]).strip().lower()
         if estado not in ESTADOS_VALIDOS_CANCHA:
             raise ValueError("Estado inválido. Use: disponible, mantenimiento o fuera_servicio.")
+        _registrar_cambio_estado_cancha(cancha, estado, datos.get("motivo"), id_usuario)
         cancha.estado = estado
 
     if "id_categoria" in datos:
@@ -858,27 +1456,52 @@ def admin_editar_cancha(id_cancha, datos):
             raise ValueError("El administrador indicado no existe.")
         cancha.id_administrador = id_administrador
 
+    if "imagen_url" in datos:
+        cancha.imagen_url = str(datos["imagen_url"]).strip() or None
+
+    if "horario_apertura" in datos:
+        cancha.horario_apertura = _hora(datos["horario_apertura"], "horario_apertura")
+    if "horario_cierre" in datos:
+        cancha.horario_cierre = _hora(datos["horario_cierre"], "horario_cierre")
+    if "dias_atencion" in datos:
+        dias = datos["dias_atencion"]
+        cancha.dias_atencion = (dias.strip() or None) if isinstance(dias, str) else None
+
+    if cancha.horario_apertura and cancha.horario_cierre:
+        if cancha.horario_cierre <= cancha.horario_apertura:
+            raise ValueError("El horario de cierre debe ser posterior al de apertura.")
+
     db.session.commit()
     return {"mensaje": "Cancha actualizada", "id_cancha": cancha.id_cancha}
 
 
-def admin_eliminar_cancha(id_cancha):
+def admin_eliminar_cancha(id_cancha, id_usuario=None):
     cancha = db.session.get(Cancha, id_cancha)
     if not cancha:
         raise ValueError("Cancha no encontrada.")
 
-    hoy = datetime.now().date()
-    reservas_activas = Reserva.query.filter(
-        Reserva.id_cancha == id_cancha,
-        Reserva.fecha_reserva >= hoy,
-        Reserva.estado_reserva.in_(["pendiente", "confirmada"]),
-    ).count()
-    if reservas_activas > 0:
-        raise ValueError(f"No se puede eliminar: hay {reservas_activas} reserva(s) activas.")
+    reservas = Reserva.query.filter_by(id_cancha=id_cancha).count()
+    eventos = Evento.query.filter_by(id_cancha=id_cancha).count()
 
-    cancha.estado = "fuera_servicio"
+    # Si tiene reservas (cualquiera) o eventos, NO se borra físicamente:
+    # se sugiere/ejecuta la desactivación (fuera_servicio) con bitácora.
+    if reservas > 0 or eventos > 0:
+        motivo = f"Eliminación rechazada: {reservas} reserva(s) y {eventos} evento(s). Se desactiva."
+        if cancha.estado != "fuera_servicio":
+            _registrar_cambio_estado_cancha(cancha, "fuera_servicio", motivo, id_usuario)
+            cancha.estado = "fuera_servicio"
+            db.session.commit()
+        return {
+            "mensaje": (
+                "La cancha tiene reservas o eventos asociados. No se puede borrar; "
+                "se desactivó (fuera de servicio) para no afectar el historial."
+            ),
+            "desactivada": True,
+        }
+
+    db.session.delete(cancha)
     db.session.commit()
-    return {"mensaje": "Cancha desactivada (fuera de servicio)"}
+    return {"mensaje": "Cancha eliminada", "desactivada": False}
 
 
 # ============================================================

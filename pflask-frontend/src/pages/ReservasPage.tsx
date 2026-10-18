@@ -3,6 +3,27 @@ import axios from "axios";
 import "../App.css";
 import { useAuth } from '../context/AuthContext';
 import { AppLayout } from '../components/layout/AppLayout';
+import {
+  DIAS_MAX_ANTICIPACION,
+  DIAS_MIN_ANTICIPACION,
+  DURACION_MAX_H,
+  DURACION_MIN_H,
+  HORA_ATENCION_MAX,
+  HORA_ATENCION_MIN,
+  REQUISITOS_PASSWORD,
+  aNumero,
+  errorNumero,
+  esNumeroValido,
+  fechaReservaValida,
+  horaFinPosterior,
+  horasDeDuracion,
+  minutosAHora,
+  minutosDeHora,
+  rangoFechaReserva,
+  rangoFechasValido,
+  textoVacio,
+  validarAltaCliente,
+} from '../utils/validaciones';
 
 // ============================================================
 // INTERFACES
@@ -18,6 +39,10 @@ interface Cancha {
   superficie?: string;
   id_categoria?: number;
   categoria?: string;
+  imagen_url?: string;
+  horario_apertura?: string | null;
+  horario_cierre?: string | null;
+  dias_atencion?: string | null;
 }
 
 interface Reserva {
@@ -30,7 +55,17 @@ interface Reserva {
   duracion: string;
   estado: string;
   precio_hora: number;
+  monto_total?: number | null;
+  expira_en?: string | null;
+  canal_origen?: string;
   motivo_cancelacion: string | null;
+}
+
+interface SlotHorario {
+  hora_inicio: string;
+  hora_fin: string;
+  disponible: boolean;
+  motivo: string | null;
 }
 
 interface ReservaAdmin extends Reserva {
@@ -67,6 +102,37 @@ interface Categoria {
 // HELPERS
 // ============================================================
 const DURACIONES_COMUNES = [1, 1.5, 2, 2.5, 3, 4];
+
+/**
+ * Reglas que el backend exige en toda reserva, comprobadas antes del POST para
+ * que el error caiga en el formulario y no un viaje al servidor después.
+ * Regresa "" cuando todo está bien.
+ */
+function validaReserva(datos: { fecha: string; hora: string; duracion: unknown }): string {
+  if (textoVacio(datos.fecha)) return "Selecciona la fecha de la reserva.";
+  if (!fechaReservaValida(datos.fecha)) {
+    return `La fecha debe estar entre ${DIAS_MIN_ANTICIPACION} y ${DIAS_MAX_ANTICIPACION} días de anticipación.`;
+  }
+
+  const duracion = aNumero(datos.duracion);
+  if (!esNumeroValido(duracion, { min: DURACION_MIN_H, max: DURACION_MAX_H })) {
+    return errorNumero("La duración", { min: DURACION_MIN_H, max: DURACION_MAX_H });
+  }
+
+  const inicioMin = minutosDeHora(datos.hora);
+  if (!Number.isFinite(inicioMin)) return "Selecciona una hora de inicio válida.";
+  if (datos.hora < HORA_ATENCION_MIN || datos.hora > HORA_ATENCION_MAX) {
+    return `La hora debe estar entre las ${HORA_ATENCION_MIN} y las ${HORA_ATENCION_MAX}.`;
+  }
+
+  // hora + duración no puede pasar del cierre: el backend lo rechaza, pero solo
+  // después de que el usuario llenó todo el formulario.
+  const finMin = inicioMin + Math.round((duracion as number) * 60);
+  if (finMin > minutosDeHora(HORA_ATENCION_MAX)) {
+    return `La reserva terminaría a las ${minutosAHora(finMin)}, fuera del horario de atención (${HORA_ATENCION_MIN} a ${HORA_ATENCION_MAX}).`;
+  }
+  return "";
+}
 
 // ============================================================
 // COMPONENTE
@@ -106,6 +172,7 @@ function ReservasPage() {
   // GENERALES
   const [canchas, setCanchas] = useState<Cancha[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
+  const [slots, setSlots] = useState<SlotHorario[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
@@ -122,6 +189,8 @@ function ReservasPage() {
   const [filtroReservas] = useState<"todas" | "vigentes">("todas");
   const [reservaPagando, setReservaPagando] = useState<Reserva | null>(null);
   const [metodoPago, setMetodoPago] = useState("efectivo");
+  const [metodoReserva, setMetodoReserva] = useState("qr");
+  const [modalReserva, setModalReserva] = useState(false);
 
   // EMPLEADO / ADMIN
   const [reservasAdmin, setReservasAdmin] = useState<ReservaAdmin[]>([]);
@@ -192,6 +261,8 @@ function ReservasPage() {
   const [canFormSuperficie, setCanFormSuperficie] = useState("");
   const [canFormCategoria, setCanFormCategoria] = useState("");
   const [canFormEstado, setCanFormEstado] = useState("disponible");
+  const [canFormMotivo, setCanFormMotivo] = useState("");
+  const [canFormImagen, setCanFormImagen] = useState("");
   const [canMensaje, setCanMensaje] = useState<{
     texto: string;
     tipo: "success" | "error" | "info";
@@ -275,6 +346,36 @@ function ReservasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtroReservas, usuario?.id_cliente]);
 
+  // ============================================================
+  // DISPONIBILIDAD DE HORARIOS
+  // ============================================================
+  const cargarDisponibilidad = (
+    idCancha: number,
+    fecha: string,
+    duracion: number
+  ) => {
+    if (!idCancha || !fecha || !duracion) {
+      setSlots([]);
+      return;
+    }
+    axios
+      .get<{ horarios: SlotHorario[] }>(
+        `http://127.0.0.1:5000/api/canchas/${idCancha}/disponibilidad` +
+          `?fecha=${fecha}&duracion=${duracion}`
+      )
+      .then((res) => setSlots(res.data.horarios || []))
+      .catch(() => setSlots([]));
+  };
+
+  useEffect(() => {
+    cargarDisponibilidad(
+      parseInt(idCancha) || 0,
+      fecha,
+      parseFloat(duracion) || 1
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idCancha, fecha, duracion]);
+
   const cargarReservasAdmin = () => {
     const params = new URLSearchParams();
     if (filtroFecha) params.append("fecha", filtroFecha);
@@ -308,6 +409,18 @@ function ReservasPage() {
   // ============================================================
   // HELPERS
   // ============================================================
+  const abrirModalReserva = (canchaId?: number) => {
+    if (canchaId !== undefined) setIdCancha(String(canchaId));
+    setMetodoReserva("qr");
+    setMensajeReserva(null);
+    setModalReserva(true);
+  };
+
+  const cerrarModalReserva = () => {
+    setModalReserva(false);
+    setMetodoReserva("qr");
+    setMensajeReserva(null);
+  };
 
   // ============================================================
   // ACCIONES CLIENTE
@@ -315,6 +428,20 @@ function ReservasPage() {
   const handleReserva = async (e: any) => {
   e.preventDefault();
   if (!usuario || !usuario.id_cliente) return;
+
+  const falla = validaReserva({ fecha, hora, duracion });
+  if (falla) {
+    setMensajeReserva({ texto: `❌ ${falla}`, tipo: "error" });
+    return;
+  }
+
+  if (metodoReserva === "efectivo") {
+    setMensajeReserva({
+      texto: "❌ No se puede reservar con efectivo: el complejo de canchas está cerrado. Elige QR, transferencia o tarjeta.",
+      tipo: "error",
+    });
+    return;
+  }
 
   // ✅ VALIDACIÓN PREVIA: Verificar si la cancha está bloqueada en esa fecha
   const bloqueoConflicto = bloqueos.find(
@@ -333,6 +460,18 @@ function ReservasPage() {
     return;
   }
 
+  // ✅ VALIDACIÓN PREVIA: el slot debe estar libre según el backend.
+  if (slots.length > 0) {
+    const slot = slots.find((s) => s.hora_inicio === hora);
+    if (slot && !slot.disponible) {
+      setMensajeReserva({
+        texto: `❌ El horario ${hora} no está disponible: ${slot.motivo}. Elige otro.`,
+        tipo: "error",
+      });
+      return;
+    }
+  }
+
   setMensajeReserva({ texto: "Procesando...", tipo: "info" });
 
   try {
@@ -342,11 +481,13 @@ function ReservasPage() {
       fecha_reserva: fecha,
       hora_inicio: hora,
       duracion: parseFloat(duracion),
+      metodo_pago: metodoReserva,
     });
     setMensajeReserva({
       texto: `✅ ${response.data.mensaje} Monto a pagar: Bs ${response.data.monto_total}.`,
       tipo: "success",
     });
+    setMetodoPago(response.data.metodo_pago || metodoReserva);
     cargarReservas();
   } catch (err: any) {
     const msg =
@@ -404,13 +545,27 @@ function ReservasPage() {
     setReservaModificandoAdmin(r);
     setModAdminFecha(r.fecha);
     setModAdminHora(r.hora_inicio);
-    setModAdminDuracion("1");
+    // Antes ponía "1" fijo: al abrir el modal y guardar sin tocar nada, el
+    // admin acortaba la reserva a una hora y se recalculaba el monto.
+    const horas = horasDeDuracion(r.duracion);
+    setModAdminDuracion(String(horas ?? DURACION_MIN_H));
     setModAdminIdCancha(String(r.id_cancha));
   };
 
   const handleModificarAdmin = async (e: any) => {
     e.preventDefault();
     if (!reservaModificandoAdmin) return;
+
+    const falla = validaReserva({
+      fecha: modAdminFecha,
+      hora: modAdminHora,
+      duracion: modAdminDuracion,
+    });
+    if (falla) {
+      alert(`❌ ${falla}`);
+      return;
+    }
+
     try {
       const r = await axios.put(`http://127.0.0.1:5000/api/admin/reservas/${reservaModificandoAdmin.id_reserva}/modificar-admin`, {
         id_cancha: parseInt(modAdminIdCancha),
@@ -442,6 +597,25 @@ function ReservasPage() {
   const handleReservaPresencial = async (e: any) => {
     e.preventDefault();
     setPresMensaje({ texto: "Procesando...", tipo: "info" });
+
+    const fallaReserva = validaReserva({
+      fecha: presFecha,
+      hora: presHora,
+      duracion: presDuracion,
+    });
+    if (fallaReserva) {
+      setPresMensaje({ texto: `❌ ${fallaReserva}`, tipo: "error" });
+      return;
+    }
+    if (textoVacio(presIdCliente)) {
+      setPresMensaje({ texto: "❌ Selecciona el cliente.", tipo: "error" });
+      return;
+    }
+    if (textoVacio(presIdCancha)) {
+      setPresMensaje({ texto: "❌ Selecciona la cancha.", tipo: "error" });
+      return;
+    }
+
     try {
       const r = await axios.post("http://127.0.0.1:5000/api/empleado/reservas", {
         id_cancha: parseInt(presIdCancha),
@@ -487,14 +661,31 @@ function ReservasPage() {
   const handleRegistrarCliente = async (e: any) => {
     e.preventDefault();
     setRegMensaje({ texto: "Procesando...", tipo: "info" });
+
+    // Antes se mandaba tal cual: una CI de letras o una contrasena de un
+    // caracter llegaban al backend, que solo revisa el largo de la clave.
+    const falla = validarAltaCliente({
+      nombre: regNombre,
+      apellido: regApellido,
+      ci: regCi,
+      celular: regCelular,
+      email: regEmail,
+      username: regUsername,
+      password: regContrasena,
+    });
+    if (falla) {
+      setRegMensaje({ texto: `❌ ${falla}`, tipo: "error" });
+      return;
+    }
+
     try {
       const r = await axios.post("http://127.0.0.1:5000/api/admin/clientes", {
-        nombre: regNombre,
-        apellido: regApellido,
-        ci: regCi,
-        celular: regCelular,
-        email: regEmail,
-        username: regUsername,
+        nombre: regNombre.trim(),
+        apellido: regApellido.trim(),
+        ci: regCi.trim(),
+        celular: regCelular.trim(),
+        email: regEmail.trim(),
+        username: regUsername.trim(),
         contrasena: regContrasena,
       });
       setRegMensaje({ texto: `✅ ${r.data.mensaje}`, tipo: "success" });
@@ -530,6 +721,33 @@ function ReservasPage() {
       return;
     }
     setBloMensaje({ texto: "Procesando...", tipo: "info" });
+
+    // Sin esto se guardaba un bloqueo con el rango invertido: queda activo en la
+    // base pero nunca coincide con ninguna fecha, así que la cancha sigue libre
+    // y el admin cree lo contrario.
+    if (textoVacio(bloIdCancha)) {
+      setBloMensaje({ texto: "❌ Selecciona la cancha.", tipo: "error" });
+      return;
+    }
+    if (!rangoFechasValido(bloFechaInicio, bloFechaFin)) {
+      setBloMensaje({
+        texto: "❌ La fecha de fin debe ser igual o posterior a la de inicio.",
+        tipo: "error",
+      });
+      return;
+    }
+    if (!horaFinPosterior(bloHoraInicio, bloHoraFin)) {
+      setBloMensaje({
+        texto: "❌ La hora de fin debe ser posterior a la de inicio.",
+        tipo: "error",
+      });
+      return;
+    }
+    if (textoVacio(bloMotivo)) {
+      setBloMensaje({ texto: "❌ Escribe el motivo del bloqueo.", tipo: "error" });
+      return;
+    }
+
     try {
       const r = await axios.post("http://127.0.0.1:5000/api/admin/bloqueos", {
         id_cancha: parseInt(bloIdCancha),
@@ -577,6 +795,8 @@ function ReservasPage() {
       setCanFormSuperficie(cancha.superficie || "");
       setCanFormCategoria(String(cancha.id_categoria || ""));
       setCanFormEstado(cancha.estado);
+      setCanFormMotivo("");
+      setCanFormImagen(cancha.imagen_url || "");
     } else {
       setCanchaEditando(null);
       setCanFormNombre("");
@@ -587,6 +807,8 @@ function ReservasPage() {
       setCanFormSuperficie("");
       setCanFormCategoria(categorias[0]?.id_categoria.toString() || "");
       setCanFormEstado("disponible");
+      setCanFormMotivo("");
+      setCanFormImagen("");
     }
     setCanMensaje(null);
     setModalCancha(true);
@@ -609,6 +831,8 @@ function ReservasPage() {
       id_categoria: parseInt(canFormCategoria),
       id_administrador: usuario.id_administrador,
       estado: canFormEstado,
+      motivo: canFormMotivo,
+      imagen_url: canFormImagen,
     };
     try {
       if (canchaEditando) {
@@ -634,8 +858,8 @@ function ReservasPage() {
   const handleEliminarCancha = async (id: number, nombre: string) => {
     if (!confirm(`¿Desactivar la cancha "${nombre}"?`)) return;
     try {
-      await axios.delete(`http://127.0.0.1:5000/api/admin/canchas/${id}`);
-      alert("✅ Cancha desactivada.");
+      const res = await axios.delete(`http://127.0.0.1:5000/api/admin/canchas/${id}`);
+      alert(`✅ ${res.data?.mensaje || "Operación completada."}`);
       cargarCanchas();
     } catch (err: any) {
       alert(`❌ ${err.response?.data?.error || "Error."}`);
@@ -733,6 +957,11 @@ function ReservasPage() {
                     borderColor: enMantenimiento ? '#ff9800' : fueraServicio ? '#e63946' : undefined
                   }}
                 >
+                  {c.imagen_url ? (
+                    <img className="cancha-imagen" src={c.imagen_url} alt={c.nombre} />
+                  ) : (
+                    <div className="cancha-imagen cancha-imagen-placeholder">🏟️</div>
+                  )}
                   <div className="cancha-card-header">
                     <span className="cancha-id">#{c.id}</span>
                     <h3>{c.nombre}</h3>
@@ -765,63 +994,21 @@ function ReservasPage() {
                   ) : fueraServicio ? (
                     <span className="badge fuera_servicio">FUERA DE SERVICIO</span>
                   ) : (
-                    <span className="badge disponible">DISPONIBLE</span>
+                    <>
+                      <span className="badge disponible">DISPONIBLE</span>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ width: "100%", marginTop: "12px" }}
+                        onClick={() => abrirModalReserva(c.id)}
+                      >
+                        📅 Reservar
+                      </button>
+                    </>
                   )}
                 </div>
               );
             })}
-          </div>
-
-          <hr className="divider" />
-
-          <h2 className="section-title">Hacer una Reserva</h2>
-          <div className="form-card">
-            <form onSubmit={handleReserva}>
-              <div className="form-group">
-                <label>Cancha</label>
-                <select value={idCancha} onChange={(e) => setIdCancha(e.target.value)} required>
-                  <option value="">Seleccione una cancha</option>
-                  {canchas
-                    .filter(c => c.estado !== 'fuera_servicio') // Excluir solo las fuera_servicio
-                    .map((c) => {
-                      const bloqueoActivo = bloqueos.find(
-                        (b) => b.id_cancha === c.id && b.estado === 'activo'
-                      );
-                      return (
-                        <option key={c.id} value={c.id}>
-                          #{c.id} - {c.nombre} - Bs {c.precio_hora}/h
-                          {bloqueoActivo ? ` (🔒 ${bloqueoActivo.motivo} hasta ${bloqueoActivo.fecha_fin})` : ''}
-                        </option>
-                      );
-                    })}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Fecha</label>
-                <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} required />
-              </div>
-              <div className="form-group">
-                <label>Hora de inicio</label>
-                <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} min="06:00" max="23:00" required />
-                <small className="hora-hint">🕐 Horario de atención: 06:00 a 23:00</small>
-              </div>
-              <div className="form-group">
-                <label>Duración (horas)</label>
-                <input type="number" step="0.5" min="1" max="4" value={duracion} onChange={(e) => setDuracion(e.target.value)} required />
-                <div className="quick-selects">
-                  {DURACIONES_COMUNES.map((d) => (
-                    <button key={d} type="button" onClick={() => setDuracion(String(d))}>{d}h</button>
-                  ))}
-                </div>
-              </div>
-              <button type="submit" className="btn-primary" style={{ width: "100%" }}>Reservar</button>
-            </form>
-            {/* ✅ AGREGAR ESTO */}
-            {mensajeReserva && (
-              <div className={`mensaje ${mensajeReserva.tipo}`}>
-                {mensajeReserva.texto}
-              </div>
-            )}
           </div>
         </>
       )}
@@ -961,13 +1148,20 @@ function ReservasPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>ID</th><th>Nombre</th><th>Deporte</th><th>Categoría</th><th>Ubicación</th><th>Superficie</th><th>Precio/h</th><th>Techada</th><th>Estado</th><th style={{ textAlign: "center" }}>Acciones</th>
+                      <th>ID</th><th>Foto</th><th>Nombre</th><th>Deporte</th><th>Categoría</th><th>Ubicación</th><th>Superficie</th><th>Precio/h</th><th>Techada</th><th>Estado</th><th style={{ textAlign: "center" }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
                     {canchas.map((c) => (
                       <tr key={c.id}>
                         <td><strong style={{ color: "var(--color-primary)" }}>#{c.id}</strong></td>
+                        <td>
+                          {c.imagen_url ? (
+                            <img className="cancha-thumb" src={c.imagen_url} alt={c.nombre} />
+                          ) : (
+                            <span className="cancha-thumb cancha-thumb-placeholder">🏟️</span>
+                          )}
+                        </td>
                         <td><strong>{c.nombre}</strong></td>
                         <td>{c.deporte}</td>
                         <td>{c.categoria || "—"}</td>
@@ -1117,6 +1311,98 @@ function ReservasPage() {
 
       {/* ===================== MODALES ===================== */}
 
+      {/* MODAL: HACER RESERVA */}
+      {esCliente && modalReserva && (
+        <div className="modal-overlay" onClick={cerrarModalReserva}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "520px" }}>
+            <h3>📅 Hacer una Reserva</h3>
+            <form onSubmit={handleReserva}>
+              <div className="form-group">
+                <label>Cancha</label>
+                <select value={idCancha} onChange={(e) => setIdCancha(e.target.value)} required>
+                  <option value="">Seleccione una cancha</option>
+                  {canchas
+                    .filter(c => c.estado !== 'fuera_servicio')
+                    .map((c) => {
+                      const bloqueoActivo = bloqueos.find(
+                        (b) => b.id_cancha === c.id && b.estado === 'activo'
+                      );
+                      return (
+                        <option key={c.id} value={c.id}>
+                          #{c.id} - {c.nombre} - Bs {c.precio_hora}/h
+                          {bloqueoActivo ? ` (🔒 ${bloqueoActivo.motivo} hasta ${bloqueoActivo.fecha_fin})` : ''}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Fecha</label>
+                <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} required min={rangoFechaReserva().min} max={rangoFechaReserva().max} title={`Entre ${DIAS_MIN_ANTICIPACION} y ${DIAS_MAX_ANTICIPACION} días de anticipación.`} />
+              </div>
+              <div className="form-group">
+                <label>Hora de inicio</label>
+                <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} min="06:00" max="23:00" required />
+                <small className="hora-hint">🕐 Horario de atención: 06:00 a 23:00</small>
+              </div>
+              {slots.length > 0 && (
+                <div className="form-group">
+                  <label>Horarios disponibles</label>
+                  <div className="slots-grid">
+                    {slots.map((s) => (
+                      <button
+                        key={s.hora_inicio}
+                        type="button"
+                        className={`slot ${s.disponible ? "libre" : "ocupado"} ${hora === s.hora_inicio ? "sel" : ""}`}
+                        disabled={!s.disponible}
+                        title={s.motivo || "Disponible"}
+                        onClick={() => setHora(s.hora_inicio)}
+                      >
+                        {s.hora_inicio}
+                        <span className="slot-sub">
+                          {s.disponible ? "libre" : s.motivo}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="form-group">
+                <label>Duración (horas)</label>
+                <input type="number" step="0.5" min="1" max="4" value={duracion} onChange={(e) => setDuracion(e.target.value)} required />
+                <div className="quick-selects">
+                  {DURACIONES_COMUNES.map((d) => (
+                    <button key={d} type="button" onClick={() => setDuracion(String(d))}>{d}h</button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-group">
+                <label>¿Con cómo vas a pagar?</label>
+                <select value={metodoReserva} onChange={(e) => setMetodoReserva(e.target.value)} required>
+                  <option value="qr">📱 QR</option>
+                  <option value="transferencia">🏦 Transferencia</option>
+                  <option value="tarjeta">💳 Tarjeta</option>
+                  <option value="efectivo" disabled>💵 Efectivo — no disponible (complejo cerrado)</option>
+                </select>
+                <small className="hint">
+                  El complejo está cerrado, por eso no se puede pagar en efectivo. Tenés 15 minutos
+                  para completar el pago o la reserva expira.
+                </small>
+              </div>
+              {mensajeReserva && (
+                <div className={`mensaje ${mensajeReserva.tipo}`}>
+                  {mensajeReserva.texto}
+                </div>
+              )}
+              <div className="modal-actions">
+                <button type="submit" className="btn-primary">Reservar</button>
+                <button type="button" className="btn-secondary" onClick={cerrarModalReserva}>Cerrar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: PAGAR */}
       {esCliente && reservaPagando && (
         <div className="modal-overlay" onClick={() => setReservaPagando(null)}>
@@ -1191,10 +1477,21 @@ function ReservasPage() {
                   <option value="">Seleccione una cancha</option>
                   {canchas.map((c) => <option key={c.id} value={c.id}>#{c.id} - {c.nombre} - Bs {c.precio_hora}/h</option>)}
                 </select>
+                {modAdminIdCancha && (() => {
+                  const mc = canchas.find((x) => x.id === parseInt(modAdminIdCancha));
+                  if (!mc?.imagen_url) return null;
+                  return (
+                    <img className="cancha-imagen-preview"
+                      src={mc.imagen_url}
+                      alt={mc.nombre}
+                      style={{ marginTop: "10px", width: "100%", height: "140px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--color-border)" }}
+                    />
+                  );
+                })()}
               </div>
               <div className="form-group">
                 <label>Nueva fecha</label>
-                <input type="date" value={modAdminFecha} onChange={(e) => setModAdminFecha(e.target.value)} required />
+                <input type="date" value={modAdminFecha} onChange={(e) => setModAdminFecha(e.target.value)} required min={rangoFechaReserva().min} max={rangoFechaReserva().max} title={`Entre ${DIAS_MIN_ANTICIPACION} y ${DIAS_MAX_ANTICIPACION} días de anticipación.`} />
               </div>
               <div className="form-group">
                 <label>Nueva hora de inicio</label>
@@ -1251,10 +1548,21 @@ function ReservasPage() {
                   <option value="">Seleccione una cancha</option>
                   {canchas.map((c) => <option key={c.id} value={c.id}>#{c.id} - {c.nombre} - Bs {c.precio_hora}/h</option>)}
                 </select>
+                {presIdCancha && (() => {
+                  const pc = canchas.find((x) => x.id === parseInt(presIdCancha));
+                  if (!pc?.imagen_url) return null;
+                  return (
+                    <img className="cancha-imagen-preview"
+                      src={pc.imagen_url}
+                      alt={pc.nombre}
+                      style={{ marginTop: "10px", width: "100%", height: "140px", objectFit: "cover", borderRadius: "8px", border: "1px solid var(--color-border)" }}
+                    />
+                  );
+                })()}
               </div>
               <div className="form-group">
                 <label>Fecha</label>
-                <input type="date" value={presFecha} onChange={(e) => setPresFecha(e.target.value)} required />
+                <input type="date" value={presFecha} onChange={(e) => setPresFecha(e.target.value)} required min={rangoFechaReserva().min} max={rangoFechaReserva().max} title={`Entre ${DIAS_MIN_ANTICIPACION} y ${DIAS_MAX_ANTICIPACION} días de anticipación.`} />
               </div>
               <div className="form-group">
                 <label>Hora de inicio</label>
@@ -1295,15 +1603,21 @@ function ReservasPage() {
             <p style={{ fontSize: "0.85rem", color: "var(--color-text-dim)", marginBottom: "15px" }}>El cliente podrá iniciar sesión con el usuario y contraseña que le asignes.</p>
             <form onSubmit={handleRegistrarCliente}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <div className="form-group"><label>Nombre *</label><input type="text" value={regNombre} onChange={(e) => setRegNombre(e.target.value)} required /></div>
-                <div className="form-group"><label>Apellido *</label><input type="text" value={regApellido} onChange={(e) => setRegApellido(e.target.value)} required /></div>
+                <div className="form-group"><label>Nombre *</label><input type="text" value={regNombre} onChange={(e) => setRegNombre(e.target.value)} required minLength={2} maxLength={60} /></div>
+                <div className="form-group"><label>Apellido *</label><input type="text" value={regApellido} onChange={(e) => setRegApellido(e.target.value)} required minLength={2} maxLength={60} /></div>
               </div>
-              <div className="form-group"><label>CI *</label><input type="text" value={regCi} onChange={(e) => setRegCi(e.target.value)} required /></div>
-              <div className="form-group"><label>Celular</label><input type="text" value={regCelular} onChange={(e) => setRegCelular(e.target.value)} /></div>
-              <div className="form-group"><label>Email</label><input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} /></div>
+              <div className="form-group"><label>CI *</label><input type="text" value={regCi} onChange={(e) => setRegCi(e.target.value)} required inputMode="numeric" pattern="[0-9]{4,10}" maxLength={10} title="Entre 4 y 10 dígitos, sin letras." /></div>
+              <div className="form-group"><label>Celular</label><input type="tel" value={regCelular} onChange={(e) => setRegCelular(e.target.value)} inputMode="tel" pattern="\+?[0-9]{7,15}" maxLength={16} title="Entre 7 y 15 dígitos, con prefijo internacional opcional." /></div>
+              <div className="form-group"><label>Email</label><input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} maxLength={120} /></div>
               <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "15px 0" }} />
-              <div className="form-group"><label>Usuario *</label><input type="text" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} required /></div>
-              <div className="form-group"><label>Contraseña *</label><input type="text" value={regContrasena} onChange={(e) => setRegContrasena(e.target.value)} required /></div>
+              <div className="form-group"><label>Usuario *</label><input type="text" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} required minLength={4} maxLength={30} pattern="[A-Za-z0-9._\-]{4,30}" title="Entre 4 y 30 caracteres: letras, números, punto, guion o guion bajo." /></div>
+              <div className="form-group">
+                <label>Contraseña *</label>
+                {/* Era type="text": la clave se ve en pantalla mientras el
+                    empleado la dicta y queda expuesta en capturas. */}
+                <input type="password" autoComplete="new-password" value={regContrasena} onChange={(e) => setRegContrasena(e.target.value)} required minLength={8} maxLength={128} />
+                <small className="hint">{REQUISITOS_PASSWORD}</small>
+              </div>
               <div className="modal-actions">
                 <button type="submit" className="btn-success">Registrar Cliente</button>
                 <button type="button" className="btn-secondary" onClick={() => setModalRegistrarCliente(false)}>Cerrar</button>
@@ -1327,11 +1641,11 @@ function ReservasPage() {
                   {canchas.map((c) => <option key={c.id} value={c.id}>#{c.id} - {c.nombre}</option>)}
                 </select>
               </div>
-              <div className="form-group"><label>Fecha de inicio</label><input type="date" value={bloFechaInicio} onChange={(e) => setBloFechaInicio(e.target.value)} required /></div>
-              <div className="form-group"><label>Fecha de fin</label><input type="date" value={bloFechaFin} onChange={(e) => setBloFechaFin(e.target.value)} required /></div>
+              <div className="form-group"><label>Fecha de inicio</label><input type="date" value={bloFechaInicio} onChange={(e) => { setBloFechaInicio(e.target.value); if (!bloFechaFin) setBloFechaFin(e.target.value); }} required /></div>
+              <div className="form-group"><label>Fecha de fin</label><input type="date" value={bloFechaFin} min={bloFechaInicio || undefined} onChange={(e) => setBloFechaFin(e.target.value)} required /></div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <div className="form-group"><label>Hora inicio</label><input type="time" value={bloHoraInicio} onChange={(e) => setBloHoraInicio(e.target.value)} min="06:00" max="23:00" required /></div>
-                <div className="form-group"><label>Hora fin</label><input type="time" value={bloHoraFin} onChange={(e) => setBloHoraFin(e.target.value)} min="06:00" max="23:00" required /></div>
+                <div className="form-group"><label>Hora inicio</label><input type="time" value={bloHoraInicio} onChange={(e) => setBloHoraInicio(e.target.value)} min={HORA_ATENCION_MIN} max={HORA_ATENCION_MAX} required /></div>
+                <div className="form-group"><label>Hora fin</label><input type="time" value={bloHoraFin} min={bloHoraInicio || HORA_ATENCION_MIN} max={HORA_ATENCION_MAX} onChange={(e) => setBloHoraFin(e.target.value)} required /></div>
               </div>
               <small className="hora-hint">🕐 Horario permitido: 06:00 a 23:00</small>
               <div className="form-group" style={{ marginTop: "10px" }}>
@@ -1356,10 +1670,10 @@ function ReservasPage() {
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "550px" }}>
             <h3>{canchaEditando ? `✏️ Editar Cancha #${canchaEditando.id}` : "➕ Nueva Cancha"}</h3>
             <form onSubmit={handleGuardarCancha}>
-              <div className="form-group"><label>Nombre *</label><input type="text" value={canFormNombre} onChange={(e) => setCanFormNombre(e.target.value)} required /></div>
+              <div className="form-group"><label>Nombre *</label><input type="text" value={canFormNombre} onChange={(e) => setCanFormNombre(e.target.value)} required minLength={2} maxLength={80} /></div>
               <div className="form-group">
                 <label>Tipo de deporte *</label>
-                <input type="text" value={canFormDeporte} onChange={(e) => setCanFormDeporte(e.target.value)} required />
+                <input type="text" value={canFormDeporte} onChange={(e) => setCanFormDeporte(e.target.value)} required minLength={2} maxLength={60} />
                 <div className="quick-selects">
                   {["Fútbol", "Básquet", "Vóley", "Tenis", "Futsal"].map((d) => <button key={d} type="button" onClick={() => setCanFormDeporte(d)}>{d}</button>)}
                 </div>
@@ -1394,6 +1708,34 @@ function ReservasPage() {
                   </select>
                 </div>
               )}
+              {canchaEditando && canFormEstado !== canchaEditando.estado && (
+                <div className="form-group">
+                  <label>Motivo del cambio *</label>
+                  <input type="text" value={canFormMotivo} onChange={(e) => setCanFormMotivo(e.target.value)} placeholder="Ej: mantenimiento de césped" required />
+                </div>
+              )}
+              <div className="form-group">
+                <label>Imagen (URL)</label>
+                <input type="url" value={canFormImagen} onChange={(e) => setCanFormImagen(e.target.value)} placeholder="https://..." pattern="https?://.+|\.{0}" maxLength={500} title="Debe empezar con http:// o https://" />
+                {canFormImagen ? (
+                  <img
+                    className="cancha-imagen-preview"
+                    src={canFormImagen}
+                    alt="Vista previa"
+                    style={{
+                      marginTop: "10px",
+                      width: "100%",
+                      height: "160px",
+                      objectFit: "cover",
+                      borderRadius: "8px",
+                      border: "1px solid var(--color-border)",
+                    }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.opacity = "0.2"; }}
+                  />
+                ) : (
+                  <small className="hora-hint">💡 Deja vacío si no quieres foto. Ej: url de Unsplash/Pexels.</small>
+                )}
+              </div>
               <div className="modal-actions">
                 <button type="submit" className="btn-success">Guardar</button>
                 <button type="button" className="btn-secondary" onClick={() => setModalCancha(false)}>Cancelar</button>
@@ -1412,7 +1754,7 @@ function ReservasPage() {
             <form onSubmit={handleGuardarCategoria}>
               <div className="form-group">
                 <label>Nombre *</label>
-                <input type="text" value={catFormNombre} onChange={(e) => setCatFormNombre(e.target.value)} required />
+                <input type="text" value={catFormNombre} onChange={(e) => setCatFormNombre(e.target.value)} required minLength={2} maxLength={60} />
                 <div className="quick-selects">
                   {["Fútbol", "Básquet", "Vóley", "Tenis"].map((n) => <button key={n} type="button" onClick={() => setCatFormNombre(n)}>{n}</button>)}
                 </div>

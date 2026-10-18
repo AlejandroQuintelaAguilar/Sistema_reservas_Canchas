@@ -4,8 +4,8 @@ import { Badge } from "../common/Badge";
 
 interface TablaEventosAdminProps {
   eventos: Evento[];
-  onEditar: (evento: Evento) => void;
-  onEliminar: (id: number) => void;
+  onEditar?: (evento: Evento) => void;
+  onEliminar?: (id: number) => void;
 }
 
 export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({ eventos, onEditar, onEliminar }) => {
@@ -53,18 +53,27 @@ export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({ eventos, o
                 </td>
                 <td style={{ textAlign: "center" }}>
                   <div className="acciones">
-                    <button
-                      onClick={() => onEditar(e)}
-                      className="btn-primary btn-sm"
-                    >
-                      Editar
-                    </button>
-                    <button
-                      onClick={() => onEliminar(e.id_evento)}
-                      className="btn-danger btn-sm"
-                    >
-                      Eliminar
-                    </button>
+                    {onEditar && (
+                      <button
+                        onClick={() => onEditar(e)}
+                        className="btn-primary btn-sm"
+                      >
+                        Editar
+                      </button>
+                    )}
+                    {onEliminar && (
+                      <button
+                        onClick={() => onEliminar(e.id_evento)}
+                        className="btn-danger btn-sm"
+                      >
+                        Eliminar
+                      </button>
+                    )}
+                    {!onEditar && !onEliminar && (
+                      <span style={{ color: "var(--color-text-dim, #6b7280)" }}>
+                        Solo lectura
+                      </span>
+                    )}
                   </div>
                 </td>
               </tr>

@@ -1,4 +1,5 @@
 from flask import Blueprint, current_app, g, jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from services import reservas_service
@@ -15,6 +16,11 @@ def _codigo_error(exc):
     if "ya existe" in mensaje or "duplicado" in mensaje:
         return 409
     return 400
+
+
+def _es_conflicto_reserva(exc):
+    """Detecta el violación de la restricción EXCLUDE anti-solape de la BD."""
+    return "ex_reserva_solapamiento" in str(getattr(exc, "orig", exc)).lower()
 
 
 def _datos():
@@ -96,6 +102,15 @@ def crear_reserva():
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
+    except IntegrityError as e:
+        db.session.rollback()
+        if _es_conflicto_reserva(e):
+            return error_json(
+                "La cancha no está disponible en ese horario (validado por la base de datos).",
+                codigo=409,
+            )
+        current_app.logger.exception("Error de integridad al crear reserva")
+        return error_json("Error al procesar la reserva.", str(e), 500)
     except Exception as e:
         db.session.rollback()
         current_app.logger.exception("Error al crear reserva")
@@ -107,7 +122,8 @@ def crear_reserva():
 def cancelar_reserva(id_reserva):
     try:
         resultado = reservas_service.cancelar_reserva(
-            id_reserva, _datos().get("motivo")
+            id_reserva, _datos().get("motivo"),
+            id_usuario=getattr(g.current_user, "id_usuario", None),
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -122,8 +138,11 @@ def cancelar_reserva(id_reserva):
 @require_auth()
 def pagar_reserva(id_reserva):
     try:
+        datos = _datos()
         resultado = reservas_service.pagar_reserva(
-            id_reserva, _datos().get("metodo_pago")
+            id_reserva, datos.get("metodo_pago"),
+            id_usuario=getattr(g.current_user, "id_usuario", None),
+            referencia=datos.get("referencia"),
         )
         return jsonify(resultado), 201
     except ValueError as e:
@@ -158,7 +177,8 @@ def get_todas_reservas():
 def cancelar_reserva_admin(id_reserva):
     try:
         resultado = reservas_service.cancelar_reserva_admin(
-            id_reserva, _datos().get("motivo")
+            id_reserva, _datos().get("motivo"),
+            id_usuario=getattr(g.current_user, "id_usuario", None),
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -173,25 +193,59 @@ def cancelar_reserva_admin(id_reserva):
 @require_auth(roles=["administrador", "empleado"])
 def modificar_reserva_admin(id_reserva):
     try:
-        resultado = reservas_service.modificar_reserva_admin(id_reserva, _datos())
+        resultado = reservas_service.modificar_reserva_admin(
+            id_reserva, _datos(),
+            id_usuario=getattr(g.current_user, "id_usuario", None),
+        )
         return jsonify(resultado), 200
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
+    except IntegrityError as e:
+        db.session.rollback()
+        if _es_conflicto_reserva(e):
+            return error_json(
+                "La cancha no está disponible en el nuevo horario "
+                "(validado por la base de datos).",
+                codigo=409,
+            )
+        return error_json("Error al modificar la reserva.", str(e), 500)
     except Exception as e:
         db.session.rollback()
         return error_json("Error al modificar la reserva.", str(e), 500)
+
+
+@reservas_bp.get("/admin/reservas/<int:id_reserva>/historial")
+@require_auth(roles=["administrador", "empleado"])
+def historial_reserva(id_reserva):
+    try:
+        return jsonify(reservas_service.listar_historial_reserva(id_reserva)), 200
+    except ValueError as e:
+        return error_json(str(e), codigo=_codigo_error(e))
+    except Exception as e:
+        return error_json("Error interno al obtener el historial.", str(e), 500)
 
 
 @reservas_bp.post("/empleado/reservas")
 @require_auth(roles=["administrador", "empleado"])
 def crear_reserva_presencial():
     try:
-        resultado = reservas_service.crear_reserva_presencial(_datos())
+        resultado = reservas_service.crear_reserva_presencial(
+            _datos(), current_user=getattr(g, "current_user", None)
+        )
         return jsonify(resultado), 201
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
+    except IntegrityError as e:
+        db.session.rollback()
+        if _es_conflicto_reserva(e):
+            return error_json(
+                "La cancha no está disponible en ese horario (validado por la base de datos).",
+                codigo=409,
+            )
+        current_app.logger.exception("Error de integridad en reserva presencial")
+        return error_json("Error al procesar la reserva presencial.", str(e), 500)
     except Exception as e:
         db.session.rollback()
         return error_json("Error al procesar la reserva presencial.", str(e), 500)
@@ -214,7 +268,11 @@ def get_bloqueos():
 @require_auth(roles=["administrador"])
 def crear_bloqueo():
     try:
-        return jsonify(reservas_service.crear_bloqueo(_datos())), 201
+        return jsonify(
+            reservas_service.crear_bloqueo(
+                _datos(), id_usuario=getattr(g.current_user, "id_usuario", None)
+            )
+        ), 201
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
@@ -243,7 +301,11 @@ def eliminar_bloqueo(id_bloqueo):
 @require_auth(roles=["administrador"])
 def admin_crear_cancha():
     try:
-        return jsonify(reservas_service.admin_crear_cancha(_datos())), 201
+        return jsonify(
+            reservas_service.admin_crear_cancha(
+                _datos(), id_usuario=getattr(g.current_user, "id_usuario", None)
+            )
+        ), 201
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
@@ -256,7 +318,9 @@ def admin_crear_cancha():
 @require_auth(roles=["administrador"])
 def admin_editar_cancha(id_cancha):
     try:
-        return jsonify(reservas_service.admin_editar_cancha(id_cancha, _datos())), 200
+        return jsonify(reservas_service.admin_editar_cancha(
+            id_cancha, _datos(), id_usuario=getattr(g, "current_user", None).id_usuario
+        )), 200
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))
@@ -269,7 +333,9 @@ def admin_editar_cancha(id_cancha):
 @require_auth(roles=["administrador"])
 def admin_eliminar_cancha(id_cancha):
     try:
-        return jsonify(reservas_service.admin_eliminar_cancha(id_cancha)), 200
+        return jsonify(reservas_service.admin_eliminar_cancha(
+            id_cancha, id_usuario=getattr(g, "current_user", None).id_usuario
+        )), 200
     except ValueError as e:
         db.session.rollback()
         return error_json(str(e), codigo=_codigo_error(e))

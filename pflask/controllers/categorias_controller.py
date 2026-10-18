@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from services import categorias_service
+from services.auth_service import require_auth
 from validators.categoria_validator import validar_datos_categoria
 from utils.responses import error_json
 
@@ -10,6 +11,7 @@ categorias_bp = Blueprint("categorias", __name__, url_prefix="/api/categorias")
 
 
 @categorias_bp.post("")
+@require_auth(roles=["administrador"])
 def crear_categoria():
     data = request.get_json(silent=True)
 
@@ -60,6 +62,7 @@ def obtener_categoria(id_categoria):
 
 
 @categorias_bp.patch("/<int:id_categoria>")
+@require_auth(roles=["administrador"])
 def modificar_categoria(id_categoria):
     if id_categoria <= 0:
         return error_json("El id_categoria debe ser mayor que 0.")
@@ -94,6 +97,7 @@ def modificar_categoria(id_categoria):
 
 
 @categorias_bp.delete("/<int:id_categoria>")
+@require_auth(roles=["administrador"])
 def eliminar_categoria(id_categoria):
     if id_categoria <= 0:
         return error_json("El id_categoria debe ser mayor que 0.")

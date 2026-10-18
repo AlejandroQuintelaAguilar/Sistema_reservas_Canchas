@@ -1,11 +1,11 @@
 from datetime import date
 
+# Catalogo unico: son los tres tipos que el servicio sabe generar. Antes el
+# validator aceptaba "canchas", "usuarios" y "eventos", que no se podian generar.
 TIPOS_REPORTE = {
-    "ingresos",
     "reservas",
-    "canchas",
-    "usuarios",
-    "eventos",
+    "ocupacion",
+    "ingresos",
 }
 
 
@@ -25,7 +25,7 @@ def validar_datos_reporte(data, parcial=False):
         tipo = tipo.strip().lower()
         if tipo not in TIPOS_REPORTE:
             raise ValueError(
-                "Tipo no válido. Use: ingresos, reservas, canchas, usuarios o eventos."
+                "Tipo no válido. Use: reservas, ocupacion o ingresos."
             )
         resultado["tipo"] = tipo
 

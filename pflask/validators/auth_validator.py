@@ -1,4 +1,47 @@
+import re
+
 VALID_ROLES = ("cliente", "administrador", "empleado")
+
+PASSWORD_MIN = 8
+PASSWORD_MAX = 128
+_RE_MAYUSCULA = re.compile(r"[A-ZÁÉÍÓÚÑ]")
+_RE_MINUSCULA = re.compile(r"[a-záéíóúñ]")
+_RE_DIGITO = re.compile(r"\d")
+_RE_SIMBOLO = re.compile(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?`~]")
+
+
+def validar_password(password):
+    """Aplica la misma politica que el frontend en src/utils/validaciones.js.
+
+    Sin esto la regla completa era solo cosmetica: un POST directo a la API
+    aceptaba '12345678' como contrasena valida.
+    """
+    if not isinstance(password, str) or not password:
+        raise ValueError("La contrasena es obligatoria")
+    if len(password) < PASSWORD_MIN:
+        raise ValueError(
+            f"La contrasena debe tener al menos {PASSWORD_MIN} caracteres"
+        )
+    if len(password) > PASSWORD_MAX:
+        raise ValueError(
+            f"La contrasena no puede superar {PASSWORD_MAX} caracteres"
+        )
+    if not _RE_MAYUSCULA.search(password):
+        raise ValueError("La contrasena debe incluir al menos una letra mayuscula")
+    if not _RE_MINUSCULA.search(password):
+        raise ValueError("La contrasena debe incluir al menos una letra minuscula")
+    if not _RE_DIGITO.search(password):
+        raise ValueError("La contrasena debe incluir al menos un numero")
+    if not _RE_SIMBOLO.search(password):
+        raise ValueError("La contrasena debe incluir al menos un simbolo")
+    return password
+
+
+def password_requerido(password, campo="contrasena"):
+    """Como validar_password pero devuelve None si el campo viene vacio."""
+    if password is None or password == "":
+        raise ValueError(f"{campo} es obligatorio")
+    return validar_password(password)
 
 
 def validar_login(data):
@@ -32,8 +75,7 @@ def validar_registro(data):
         raise ValueError("nombre, email y contrasena son obligatorios")
     if "@" not in email:
         raise ValueError("email inválido")
-    if len(password) < 8:
-        raise ValueError("La contraseña debe tener al menos 8 caracteres")
+    validar_password(password)
 
     return {
         "nombre": nombre_in,
@@ -69,8 +111,7 @@ def validar_reset(data):
 
     if not token or not password:
         raise ValueError("token y contrasena son obligatorios")
-    if len(password) < 8:
-        raise ValueError("La contraseña debe tener al menos 8 caracteres")
+    validar_password(password)
 
     return {"token": token, "password": str(password)}
 

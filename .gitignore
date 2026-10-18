@@ -13,6 +13,9 @@ pyvenv.cfg
 pflask/config/correo.env
 pflask/auth/config/correo.env
 
+# Subidas de los clientes (comprobantes de pago): son datos personales, no codigo
+pflask/uploads/
+
 # Node
 node_modules/
 dist/

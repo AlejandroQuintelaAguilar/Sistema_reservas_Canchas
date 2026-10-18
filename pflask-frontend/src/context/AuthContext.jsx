@@ -1,4 +1,5 @@
 import { createContext, useState, useContext } from 'react';
+import { authService } from '../services/authService';
 
 const AuthContext = createContext();
 
@@ -19,6 +20,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
+    authService.logout().catch(() => {});
     localStorage.removeItem('token');
     localStorage.removeItem('role');
     localStorage.removeItem('userData');

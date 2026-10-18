@@ -27,14 +27,14 @@ def _formatear_valor(valor):
     return str(valor)
 
 
-def exportar_excel(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo Deportivo Canchas"):
+def exportar_excel(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo Deportivo Canchas", titulo=None):
     wb = Workbook()
     ws = wb.active
     ws.title = tipo[:31]
 
     ws["A1"] = nombre_empresa
     ws["A1"].font = Font(bold=True, size=14, color="1F2937")
-    ws["A2"] = _titulo(tipo)
+    ws["A2"] = titulo or _titulo(tipo)
     ws["A2"].font = Font(bold=True, size=12)
     ws["A3"] = f"Desde {fecha_inicio} hasta {fecha_fin}"
     ws["A3"].font = Font(italic=True, size=10, color="6B7280")
@@ -64,7 +64,7 @@ def exportar_excel(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complej
     return buffer
 
 
-def exportar_pdf(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo Deportivo Canchas"):
+def exportar_pdf(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo Deportivo Canchas", titulo=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -75,13 +75,15 @@ def exportar_pdf(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo 
         bottomMargin=30,
     )
     estilos = getSampleStyleSheet()
-    titulo = ParagraphStyle(
+    # Los estilos se llaman estilo_* para no chocar con el parámetro `titulo`
+    # que recibe el texto real del reporte o del análisis.
+    estilo_titulo = ParagraphStyle(
         "TituloR",
         parent=estilos["Title"],
         textColor=colors.HexColor("#111827"),
         fontSize=16,
     )
-    sub = ParagraphStyle(
+    estilo_sub = ParagraphStyle(
         "SubR",
         parent=estilos["Normal"],
         textColor=colors.HexColor("#6B7280"),
@@ -89,9 +91,9 @@ def exportar_pdf(tipo, filas, fecha_inicio, fecha_fin, nombre_empresa="Complejo 
     )
 
     elementos = [
-        Paragraph(nombre_empresa, titulo),
-        Paragraph(_titulo(tipo), estilos["Heading2"]),
-        Paragraph(f"Desde {fecha_inicio} hasta {fecha_fin}", sub),
+        Paragraph(nombre_empresa, estilo_titulo),
+        Paragraph(titulo or _titulo(tipo), estilos["Heading2"]),
+        Paragraph(f"Desde {fecha_inicio} hasta {fecha_fin}", estilo_sub),
         Spacer(1, 12),
     ]
 

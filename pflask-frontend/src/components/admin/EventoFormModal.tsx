@@ -1,6 +1,33 @@
 import React, { useState, useEffect } from "react";
 import type { Evento, CreateEventoDTO } from "../../types/evento.types";
 import { Modal } from "../common/Modal";
+import {
+  CUPOS_MAX,
+  HORA_ATENCION_MAX,
+  HORA_ATENCION_MIN,
+  esNumeroValido,
+  horaFinPosterior,
+} from "../../utils/validaciones";
+import { api } from "../../services/api";
+
+const TIPOS_EVENTO = ["Deportivo", "Social", "Servicio Social"];
+
+interface CanchaOption {
+  id_cancha: number;
+  nombre_cancha: string;
+  tipo_deporte: string | null;
+  estado: string;
+}
+
+const estaOperativa = (c: CanchaOption) =>
+  c.estado !== "fuera_servicio" && c.estado !== "mantenimiento";
+
+const etiquetaEstado = (estado: string) =>
+  estado === "fuera_servicio"
+    ? " [Fuera de servicio]"
+    : estado === "mantenimiento"
+      ? " [En mantenimiento]"
+      : "";
 
 interface EventoFormModalProps {
   isOpen: boolean;
@@ -29,6 +56,24 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [canchas, setCanchas] = useState<CanchaOption[]>([]);
+  const [cargandoCanchas, setCargandoCanchas] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setCargandoCanchas(true);
+    api
+      .get<CanchaOption[]>("/canchas")
+      .then((res) => {
+        const lista = Array.isArray(res.data) ? res.data : [];
+        setCanchas(lista);
+        if (eventoEditar || lista.length === 0) return;
+        const operativa = lista.find(estaOperativa) ?? lista[0];
+        setFormData((prev) => ({ ...prev, id_cancha: operativa.id_cancha }));
+      })
+      .catch(() => setError("No se pudo cargar la lista de canchas."))
+      .finally(() => setCargandoCanchas(false));
+  }, [isOpen, eventoEditar]);
 
   useEffect(() => {
     if (eventoEditar) {
@@ -72,6 +117,26 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
     const hoy = new Date().toISOString().split("T")[0];
     if (formData.fecha_evento < hoy) {
       setError("La fecha del evento no puede ser anterior a la fecha actual.");
+      return;
+    }
+    // La coherencia inicio/fin no la cubre el input: 18:00-06:00 se descubría
+    // recién cuando el backend rechazaba el evento.
+    if (!horaFinPosterior(formData.hora_inicio, formData.hora_fin)) {
+      setError("La hora de fin debe ser posterior a la hora de inicio.");
+      return;
+    }
+    if (formData.hora_inicio < HORA_ATENCION_MIN || formData.hora_fin > HORA_ATENCION_MAX) {
+      setError(
+        `El evento debe quedar dentro del horario de atención (${HORA_ATENCION_MIN} a ${HORA_ATENCION_MAX}).`,
+      );
+      return;
+    }
+    if (!esNumeroValido(formData.id_cancha, { min: 1, entero: true })) {
+      setError("El número de cancha debe ser un entero válido.");
+      return;
+    }
+    if (!esNumeroValido(formData.cupo_maximo, { min: 1, entero: true, max: CUPOS_MAX })) {
+      setError(`El cupo debe ser un entero entre 1 y ${CUPOS_MAX}.`);
       return;
     }
 
@@ -132,15 +197,20 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <div>
-            <label style={labelStyle}>Tipo de Evento</label>
-            <input
-              type="text"
+            <label style={labelStyle}>Tipo de Evento *</label>
+            <select
               name="tipo_evento"
               value={formData.tipo_evento}
               onChange={handleChange}
-              placeholder="Social, Torneo, Taller..."
+              required
               style={inputStyle}
-            />
+            >
+              {TIPOS_EVENTO.map((tipo) => (
+                <option key={tipo} value={tipo}>
+                  {tipo}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -185,26 +255,48 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <div>
-            <label style={labelStyle}>ID Cancha *</label>
-            <input
-              type="number"
+            <label style={labelStyle}>Cancha Asignada *</label>
+            <select
               name="id_cancha"
               value={formData.id_cancha}
               onChange={handleChange}
               required
-              min={1}
+              disabled={cargandoCanchas}
               style={inputStyle}
-            />
+            >
+              {canchas.length === 0 ? (
+                <option value={formData.id_cancha}>
+                  {cargandoCanchas
+                    ? "Cargando canchas..."
+                    : `Cancha #${formData.id_cancha}`}
+                </option>
+              ) : (
+                canchas.map((c) => (
+                  <option
+                    key={c.id_cancha}
+                    value={c.id_cancha}
+                    disabled={!estaOperativa(c)}
+                  >
+                    {c.nombre_cancha}
+                    {c.tipo_deporte ? ` (${c.tipo_deporte})` : ""}
+                    {etiquetaEstado(c.estado)}
+                  </option>
+                ))
+              )}
+            </select>
           </div>
 
           <div>
-            <label style={labelStyle}>Cupo Máximo</label>
+            <label style={labelStyle}>Cupo Máximo *</label>
             <input
               type="number"
               name="cupo_maximo"
               value={formData.cupo_maximo || ""}
               onChange={handleChange}
+              required
               min={1}
+              max={CUPOS_MAX}
+              step={1}
               style={inputStyle}
             />
           </div>

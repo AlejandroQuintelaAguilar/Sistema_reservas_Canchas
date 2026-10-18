@@ -17,6 +17,12 @@ if not database_url:
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+# Comprobantes de pago: se valida el tipo real del archivo y los 5 MB en el
+# servicio, asi que el limite de Flask es solo una red de seguridad.
+app.config["UPLOAD_FOLDER"] = os.path.join(app.root_path, "uploads")
+app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024
+os.makedirs(os.path.join(app.config["UPLOAD_FOLDER"], "comprobantes"), exist_ok=True)
+
 db.init_app(app)
 CORS(app)
 
@@ -104,12 +110,17 @@ app.register_blueprint(categorias_bp)
 app.register_blueprint(canchas_bp)
 
 # Módulo de Pagos
-from controllers.pagos_controller import pagos_bp
+from controllers.pagos_controller import pagos_bp, caja_bp
 app.register_blueprint(pagos_bp)
+app.register_blueprint(caja_bp)
 
 # Módulo de Reportes
 from controllers.reportes_controller import reportes_bp
 app.register_blueprint(reportes_bp)
+
+# Módulo de Notificaciones
+from controllers.notificaciones_controller import notificaciones_bp
+app.register_blueprint(notificaciones_bp)
 
 # Módulo de Analítica (vistas SQL para el dashboard)
 from controllers.analitica_controller import analitica_bp
@@ -119,22 +130,36 @@ app.register_blueprint(analitica_bp)
 from controllers.reservas_controller import reservas_bp
 app.register_blueprint(reservas_bp)
 
+# Módulo de Tarifas por franja y Horarios por día
+from controllers.tarifas_controller import tarifas_bp
+app.register_blueprint(tarifas_bp)
+
 
 if __name__ == "__main__":
-    # Worker en segundo plano: expira reservas sin pagar y completa pasadas
+    # Worker en segundo plano: expira pagos y reservas sin pagar, y completa
+    # las reservas cuya hora de juego ya paso.
     import threading
 
-    from services import reservas_service
+    from services import pagos_service, reservas_service, notificaciones_service
 
 
     def _background_worker():
         with app.app_context():
             while True:
-                try:
-                    reservas_service.expirar_reservas_vencidas()
-                    reservas_service.completar_reservas_pasadas()
-                except Exception as e:  # noqa: BLE001
-                    print(f"[WORKER ERROR] {e}")
+                # Los pagos expiran antes que las reservas para que la reserva
+                # ya no vea saldo por cobrar cuando se expira.
+                for nombre, accion in (
+                    ("pagos", pagos_service.expirar_pagos_vencidos),
+                    ("reservas", reservas_service.expirar_reservas_vencidas),
+                    ("completar", reservas_service.completar_reservas_pasadas),
+                    ("recordatorios", notificaciones_service.generar_recordatorios),
+                    # El envio va al final y aparte: la reserva nunca espera.
+                    ("notificaciones", notificaciones_service.enviar_pendientes),
+                ):
+                    try:
+                        accion()
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[WORKER ERROR:{nombre}] {e}")
                 import time
                 time.sleep(60)
 
