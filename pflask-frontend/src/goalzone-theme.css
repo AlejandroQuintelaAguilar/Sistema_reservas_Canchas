@@ -1,0 +1,162 @@
+/* ============================================================
+   GOALZONE THEME (inspirado) - Sin romper funcionalidad existente
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Montserrat:wght@500;600;700;800&display=swap');
+
+:root {
+  /* Palette inspirada en GoalZone (tono deportivo) */
+  --gz-bg: #0b130f;
+  --gz-bg-2: #101b13;
+  --gz-surface: #ffffff;
+  --gz-surface-2: #f8faf7;
+  --gz-ink: #06120b;
+  --gz-text: #1f2920;
+  --gz-muted: #6b7a66;
+  --gz-lime: #b6ef4b;
+  --gz-lime-600: #9dd63a;
+  --gz-border: #e6ebe2;
+  --gz-border-strong: #d8e1d2;
+  --gz-radius: 12px;
+  --gz-radius-lg: 16px;
+  --gz-shadow: 0 10px 30px rgba(6, 18, 11, 0.06);
+  --gz-shadow-soft: 0 6px 18px rgba(182, 239, 75, 0.14);
+
+  /* Compatibilidad: no sobrescribimos todos los vars existentes */
+  /* Solo suavizamos algunos alias */
+}
+
+body,
+html {
+  font-family: Inter, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.login-header h1,
+.page-title,
+.section-title,
+.modal h3 {
+  font-family: Montserrat, Inter, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  letter-spacing: -0.3px;
+  font-weight: 800;
+  color: var(--color-text, var(--text-h));
+}
+
+/* Botones: dar un pequeño toque deportivo manteniendo clases existentes */
+.btn-primary,
+.btn-success,
+.btn-danger,
+.btn-secondary,
+.btn-info {
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  box-shadow: var(--gz-shadow);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.btn-primary:hover,
+.btn-success:hover,
+.btn-danger:hover,
+.btn-secondary:hover,
+.btn-info:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--gz-shadow-soft);
+}
+
+.btn-primary:active,
+.btn-success:active,
+.btn-danger:active,
+.btn-secondary:active,
+.btn-info:active {
+  transform: translateY(0);
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--gz-lime) 0%, var(--gz-lime-600) 100%);
+  border-color: rgba(157, 214, 58, 0.9);
+  color: #10200b;
+}
+
+/* Tarjetas, formularios, modales - tono más pulcro */
+.card,
+.dashboard-card,
+.user-card,
+.form-card,
+.tabla-contenedor,
+.reserva-card,
+.cancha-card,
+.evento-card {
+  border-radius: var(--gz-radius-lg);
+  border: 1px solid var(--color-border, var(--gz-border));
+  box-shadow: var(--gz-shadow);
+  backdrop-filter: none;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="date"],
+input[type="time"],
+input[type="tel"],
+input[type="number"],
+select,
+textarea {
+  border-radius: var(--gz-radius);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 3px solid rgba(182, 239, 75, 0.45);
+  outline-offset: 2px;
+  border-color: rgba(157, 214, 58, 0.8);
+}
+
+/* Modal overlay ya existe; solo refinamos el modal */
+.modal {
+  border-radius: calc(var(--gz-radius-lg) + 2px);
+  box-shadow: 0 24px 60px rgba(6, 18, 11, 0.16);
+  border: 1px solid rgba(230, 235, 226, 0.9);
+}
+
+.modal-overlay {
+  backdrop-filter: blur(2px);
+  background: radial-gradient(1200px 800px at 50% 0%, rgba(11, 19, 15, 0.25), rgba(11, 19, 15, 0.45));
+}
+
+/* Sidebar/topbar sutiles sin romper estructura */
+.app-layout .sidebar,
+.app-layout nav.sidebar {
+  border-right: 1px solid rgba(229, 231, 235, 0.9);
+}
+
+.app-layout .topbar,
+.app-layout header.topbar {
+  border-bottom: 1px solid rgba(229, 231, 235, 0.9);
+  background: linear-gradient(180deg, #ffffff 0%, #fafcf9 100%);
+}
+
+.mensaje.success {
+  border-radius: var(--gz-radius);
+  box-shadow: var(--gz-shadow-soft);
+}
+
+.mensaje.error {
+  border-radius: var(--gz-radius);
+}
+
+.table {
+  border-radius: var(--gz-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--gz-shadow);
+}
