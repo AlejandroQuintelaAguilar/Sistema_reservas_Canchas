@@ -372,3 +372,17 @@
   color: #0f3f3f;
   background: rgba(15, 127, 130, 0.08);
 }
+
+.login-inspired-switch a {
+  padding: 2px 4px;
+  color: #0f7f82;
+  font-weight: 800;
+  text-decoration: none;
+  border-radius: 999px;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.login-inspired-switch a:hover {
+  color: #0f3f3f;
+  background: rgba(15, 127, 130, 0.08);
+}
