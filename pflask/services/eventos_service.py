@@ -86,10 +86,27 @@ class EventosService:
         )
 
     @staticmethod
-    def get_all_eventos(tipo=None):
+    def get_all_eventos(tipo=None, solo_vigentes=False):
+        """Eventos ordenados por fecha.
+
+        Con solo_vigentes=True se descartan los que ya terminaron: los que
+        son de dias anteriores o los de hoy cuya hora_fin ya paso. El admin
+        es el unico que ve el historial completo.
+        """
         consulta = Evento.query
         if tipo:
             consulta = consulta.filter(Evento.tipo_evento == tipo)
+        if solo_vigentes:
+            ahora = datetime.now()
+            consulta = consulta.filter(
+                db.or_(
+                    Evento.fecha_evento > ahora.date(),
+                    db.and_(
+                        Evento.fecha_evento == ahora.date(),
+                        Evento.hora_fin > ahora.time(),
+                    ),
+                )
+            )
         return consulta.order_by(
             Evento.fecha_evento.asc(), Evento.hora_inicio.asc()
         ).all()

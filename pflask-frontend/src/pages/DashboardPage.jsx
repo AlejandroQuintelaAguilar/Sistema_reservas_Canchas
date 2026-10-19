@@ -7,6 +7,8 @@ import {
   REQUISITOS_PASSWORD,
   erroresContrasena,
   validarFormularioUsuario,
+  soloDigitos,
+  soloDigitosCelular,
 } from "../utils/validaciones";
 
 const DIAS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -198,7 +200,11 @@ const DashboardPage = () => {
 
   const handleFormChange = (event) => {
     const { name, value } = event.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    // CI y celular son numericos: se filtran al escribir para no guardar letras.
+    let limpio = value;
+    if (name === "ci") limpio = soloDigitos(value);
+    else if (name === "celular") limpio = soloDigitosCelular(value);
+    setForm((prev) => ({ ...prev, [name]: limpio }));
   };
 
   const handleGuardar = async (event) => {

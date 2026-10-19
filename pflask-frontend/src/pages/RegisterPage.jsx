@@ -11,6 +11,8 @@ import {
   USERNAME_RE,
   REQUISITOS_PASSWORD,
   esquemaContrasena,
+  soloDigitos,
+  soloDigitosCelular,
 } from "../utils/validaciones";
 
 const schema = yup
@@ -46,11 +48,20 @@ const RegisterPage = () => {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm({ resolver: yupResolver(schema) });
 
   const [message, setMessage] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Deja solo digitos en el campo mientras se escribe: la letra no llega a
+  // mostrarse y el dato nunca se envia invalido.
+  const filtrarDigitos = (campo, limpiar) => (event) => {
+    const limpio = limpiar(event.target.value);
+    event.target.value = limpio;
+    setValue(campo, limpio, { shouldValidate: false });
+  };
 
   const onSubmit = async (data) => {
     setMessage("");
@@ -110,7 +121,13 @@ const RegisterPage = () => {
           <div className="form-row">
             <div className="form-group">
               <label>CI</label>
-              <input type="text" placeholder="1234567" {...register("ci")} />
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="1234567"
+                {...register("ci")}
+                onChange={filtrarDigitos("ci", soloDigitos)}
+              />
               {errors.ci && (
                 <span className="campo-error">{errors.ci.message}</span>
               )}
@@ -119,8 +136,10 @@ const RegisterPage = () => {
               <label>Celular</label>
               <input
                 type="text"
+                inputMode="tel"
                 placeholder="+591 70000000"
                 {...register("celular")}
+                onChange={filtrarDigitos("celular", soloDigitosCelular)}
               />
               {errors.celular && (
                 <span className="campo-error">{errors.celular.message}</span>

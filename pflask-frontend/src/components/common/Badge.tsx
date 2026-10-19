@@ -7,7 +7,7 @@ interface BadgeProps {
 
 export const Badge: React.FC<BadgeProps> = ({ children, variant = "neutral" }) => {
   const styles: Record<string, { bg: string; color: string; border: string }> = {
-    primary: { bg: "rgba(99, 102, 241, 0.12)", color: "#4338CA", border: "1px solid rgba(99, 102, 241, 0.4)" },
+    primary: { bg: "rgba(15, 127, 130, 0.12)", color: "#0F3F3F", border: "1px solid rgba(15, 127, 130, 0.4)" },
     success: { bg: "rgba(22, 163, 74, 0.12)", color: "#15803D", border: "1px solid rgba(22, 163, 74, 0.4)" },
     warning: { bg: "rgba(202, 138, 4, 0.12)", color: "#A16207", border: "1px solid rgba(202, 138, 4, 0.4)" },
     info: { bg: "rgba(37, 99, 235, 0.12)", color: "#1D4ED8", border: "1px solid rgba(37, 99, 235, 0.4)" },

@@ -76,7 +76,7 @@ function ReservaFormPage() {
         <button 
           type="submit" 
           disabled={enviando}
-          style={{ padding: "10px", background: "#6366F1", color: "white", border: "none", borderRadius: "5px", cursor: "pointer" }}
+          style={{ padding: "10px", background: "#0F7F82", color: "white", border: "none", borderRadius: "999px", cursor: "pointer" }}
         >
           {enviando ? "Guardando..." : "Confirmar Reserva"}
         </button>

@@ -23,6 +23,8 @@ import {
   rangoFechasValido,
   textoVacio,
   validarAltaCliente,
+  soloDigitos,
+  soloDigitosCelular,
 } from '../utils/validaciones';
 
 // ============================================================
@@ -1079,10 +1081,10 @@ function ReservasPage() {
             <button className="btn-primary" onClick={abrirModalReservaPresencial}>➕ Reserva Presencial</button>
             <button className="btn-success" onClick={abrirModalRegistrarCliente}>👤 Registrar Cliente</button>
             <button className="btn-warning" onClick={abrirModalBloqueo}>🔒 Bloquear Cancha</button>
-            <button className={verGestionCanchas ? "btn-secondary" : "btn-primary"} onClick={() => setVerGestionCanchas(!verGestionCanchas)} style={{ background: verGestionCanchas ? "#6b7280" : "#6366F1" }}>
+            <button className={verGestionCanchas ? "btn-secondary" : "btn-primary"} onClick={() => setVerGestionCanchas(!verGestionCanchas)} style={{ background: verGestionCanchas ? "#6b7280" : "#0F7F82" }}>
               🏟️ {verGestionCanchas ? "Ocultar Canchas" : "Gestionar Canchas"}
             </button>
-            <button className={verGestionCategorias ? "btn-secondary" : "btn-primary"} onClick={() => setVerGestionCategorias(!verGestionCategorias)} style={{ background: verGestionCategorias ? "#6b7280" : "#6366F1" }}>
+            <button className={verGestionCategorias ? "btn-secondary" : "btn-primary"} onClick={() => setVerGestionCategorias(!verGestionCategorias)} style={{ background: verGestionCategorias ? "#6b7280" : "#0F7F82" }}>
               🏷️ {verGestionCategorias ? "Ocultar Categorías" : "Categorías"}
             </button>
           </div>
@@ -1606,8 +1608,8 @@ function ReservasPage() {
                 <div className="form-group"><label>Nombre *</label><input type="text" value={regNombre} onChange={(e) => setRegNombre(e.target.value)} required minLength={2} maxLength={60} /></div>
                 <div className="form-group"><label>Apellido *</label><input type="text" value={regApellido} onChange={(e) => setRegApellido(e.target.value)} required minLength={2} maxLength={60} /></div>
               </div>
-              <div className="form-group"><label>CI *</label><input type="text" value={regCi} onChange={(e) => setRegCi(e.target.value)} required inputMode="numeric" pattern="[0-9]{4,10}" maxLength={10} title="Entre 4 y 10 dígitos, sin letras." /></div>
-              <div className="form-group"><label>Celular</label><input type="tel" value={regCelular} onChange={(e) => setRegCelular(e.target.value)} inputMode="tel" pattern="\+?[0-9]{7,15}" maxLength={16} title="Entre 7 y 15 dígitos, con prefijo internacional opcional." /></div>
+              <div className="form-group"><label>CI *</label><input type="text" value={regCi} onChange={(e) => setRegCi(soloDigitos(e.target.value))} required inputMode="numeric" pattern="[0-9]{4,10}" maxLength={10} title="Entre 4 y 10 dígitos, sin letras." /></div>
+              <div className="form-group"><label>Celular</label><input type="tel" value={regCelular} onChange={(e) => setRegCelular(soloDigitosCelular(e.target.value))} inputMode="tel" pattern="\+?[0-9]{7,15}" maxLength={16} title="Entre 7 y 15 dígitos, con prefijo internacional opcional." /></div>
               <div className="form-group"><label>Email</label><input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} maxLength={120} /></div>
               <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "15px 0" }} />
               <div className="form-group"><label>Usuario *</label><input type="text" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} required minLength={4} maxLength={30} pattern="[A-Za-z0-9._\-]{4,30}" title="Entre 4 y 30 caracteres: letras, números, punto, guion o guion bajo." /></div>

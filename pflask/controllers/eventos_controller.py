@@ -26,10 +26,19 @@ def _usuario_actual():
 
 @eventos_bp.route("", methods=["GET"])
 def get_eventos():
-    """Listado. Sin autenticación solo se exponen los eventos de tipo Servicio Social."""
+    """Listado. Sin autenticación solo se exponen los eventos de tipo Servicio Social.
+
+    Los eventos que ya pasaron (su fecha terminó) se ocultan a clientes y
+    empleados; solo el administrador conserva el historial completo.
+    """
     try:
-        if _usuario_actual() is None:
-            eventos = EventosService.get_all_eventos(tipo=TIPO_EVENTO_PUBLICO)
+        usuario = _usuario_actual()
+        es_admin = usuario is not None and usuario.rol == "administrador"
+
+        if usuario is None:
+            eventos = EventosService.get_all_eventos(
+                tipo=TIPO_EVENTO_PUBLICO, solo_vigentes=True
+            )
             return jsonify([e.to_dict() for e in eventos]), 200
 
         tipo = request.args.get("tipo")
@@ -39,7 +48,9 @@ def get_eventos():
                 "detalles": [f"Valores permitidos: {', '.join(TIPOS_EVENTO_VALIDOS)}."],
             }), 400
 
-        eventos = EventosService.get_all_eventos(tipo=tipo)
+        eventos = EventosService.get_all_eventos(
+            tipo=tipo, solo_vigentes=not es_admin
+        )
         return jsonify([e.to_dict() for e in eventos]), 200
     except Exception as ex:
         return jsonify({"error": "Error al consultar los eventos", "detalle": str(ex)}), 500

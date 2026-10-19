@@ -87,6 +87,8 @@ export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar..."
+              disabled
+              title="Buscador deshabilitado (no funcional)"
             />
           </div>
           <div className="user">

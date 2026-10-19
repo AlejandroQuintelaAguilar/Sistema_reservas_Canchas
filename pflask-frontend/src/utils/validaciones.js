@@ -157,6 +157,19 @@ export const CELULAR_RE = /^\+?[0-9]{7,15}$/;
 export const USERNAME_RE = /^[A-Za-z0-9._-]{4,30}$/;
 export const URL_RE = /^https?:\/\/[^\s]+$/i;
 
+/**
+ * Deja unicamente digitos. Se usa en los campos numericos (CI, celular) para
+ * que la letra no llegue a escribirse, en vez de avisar recien al enviar.
+ */
+export const soloDigitos = (valor) => String(valor ?? "").replace(/\D+/g, "");
+
+/** Celular: solo digitos, conservando un "+" unicamente al inicio. */
+export const soloDigitosCelular = (valor) => {
+  const v = String(valor ?? "").replace(/^\s+/, "");
+  const digitos = v.replace(/\D+/g, "");
+  return v.startsWith("+") ? `+${digitos}` : digitos;
+};
+
 export const errorFormato = (valor, re, mensaje) =>
   !re.test(String(valor ?? "").trim()) ? mensaje : "";
 

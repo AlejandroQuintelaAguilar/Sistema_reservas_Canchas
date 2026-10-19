@@ -9,6 +9,10 @@ _RE_MINUSCULA = re.compile(r"[a-záéíóúñ]")
 _RE_DIGITO = re.compile(r"\d")
 _RE_SIMBOLO = re.compile(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?`~]")
 
+# Mismos formatos que src/utils/validaciones.js (CI_RE y CELULAR_RE).
+_RE_CI = re.compile(r"^[0-9]{4,10}$")
+_RE_CELULAR = re.compile(r"^\+?[0-9]{7,15}$")
+
 
 def validar_password(password):
     """Aplica la misma politica que el frontend en src/utils/validaciones.js.
@@ -42,6 +46,42 @@ def password_requerido(password, campo="contrasena"):
     if password is None or password == "":
         raise ValueError(f"{campo} es obligatorio")
     return validar_password(password)
+
+
+def validar_ci(ci, obligatorio=False):
+    """CI: solo digitos, de 4 a 10. Devuelve el valor limpio o None.
+
+    Sin esto un POST directo a la API guardaba 'abc' como CI: el formato solo
+    se revisaba en el frontend.
+    """
+    if ci is None:
+        if obligatorio:
+            raise ValueError("El CI es obligatorio")
+        return None
+    ci = str(ci).strip()
+    if not ci:
+        if obligatorio:
+            raise ValueError("El CI es obligatorio")
+        return None
+    if not _RE_CI.match(ci):
+        raise ValueError("El CI debe tener entre 4 y 10 digitos, sin letras")
+    return ci
+
+
+def validar_celular(celular, obligatorio=False):
+    """Celular: 7 a 15 digitos, con '+' inicial opcional. Devuelve valor o None."""
+    if celular is None:
+        if obligatorio:
+            raise ValueError("El celular es obligatorio")
+        return None
+    celular = str(celular).strip()
+    if not celular:
+        if obligatorio:
+            raise ValueError("El celular es obligatorio")
+        return None
+    if not _RE_CELULAR.match(celular):
+        raise ValueError("El celular debe tener entre 7 y 15 digitos")
+    return celular
 
 
 def validar_login(data):

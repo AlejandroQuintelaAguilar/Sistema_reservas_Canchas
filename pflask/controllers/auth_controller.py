@@ -26,7 +26,7 @@ from services.auth_service import (
     verify_password,
 )
 from services.email_service import send_recovery_email, smtp_is_configured
-from validators.auth_validator import validar_password
+from validators.auth_validator import validar_password, validar_ci, validar_celular
 
 auth_bp = Blueprint("auth", __name__)
 admin_bp = Blueprint("admin", __name__)
@@ -71,8 +71,9 @@ def _unique_ci(preferred=None):
         existing = Persona.query.filter_by(ci=preferred).first()
         if not existing:
             return preferred[:20]
+    # Solo digitos: el CI se guarda siempre numerico, igual que valida el frontend.
     for _ in range(20):
-        ci = secrets.token_hex(8)[:20]
+        ci = str(secrets.randbelow(10**9)).zfill(9)
         if not Persona.query.filter_by(ci=ci).first():
             return ci
     raise RuntimeError("No se pudo generar un CI único")
@@ -281,6 +282,8 @@ def register():
     if "@" not in email:
         return jsonify({"error": "email inválido"}), 400
     try:
+        ci_in = validar_ci(ci_in)
+        celular = validar_celular(celular)
         validar_password(password)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -476,7 +479,10 @@ def update_user(user_id):
             return jsonify({"error": "El apellido no puede estar vacío"}), 400
         persona.apellido = apellido[:80]
     if ci is not None:
-        ci = str(ci).strip()
+        try:
+            ci = validar_ci(ci, obligatorio=False)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         if not ci:
             return jsonify({"error": "El CI no puede estar vacío"}), 400
         duplicado = Persona.query.filter(Persona.ci == ci, Persona.id_persona != persona.id_persona).first()
@@ -484,7 +490,11 @@ def update_user(user_id):
             return jsonify({"error": "Ese CI ya está registrado"}), 409
         persona.ci = ci[:20]
     if "celular" in data:
-        persona.celular = (str(celular).strip()[:20] if celular else None)
+        try:
+            celular_l = validar_celular(data.get("celular"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        persona.celular = celular_l if celular_l else None
     if email is not None:
         email = str(email).strip().lower()
         if email and "@" not in email:

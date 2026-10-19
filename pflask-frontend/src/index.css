@@ -2,14 +2,14 @@
    PALETA OFICIAL — Morado / Índigo (definida en el proyecto)
    ============================================================ */
 :root {
-  --color-bg: #F5F5F7;
-  --color-bg-elevated: #F1F1F4;
+  --color-bg: #F4F7F3;
+  --color-bg-elevated: #EBF1EA;
   --color-surface: #FFFFFF;
 
-  --color-primary: #6366F1;
-  --color-primary-hover: #4F46E5;
-  --color-primary-soft: rgba(99, 102, 241, 0.12);
-  --color-navbar: #1E1E2E;
+  --color-primary: #0F7F82;
+  --color-primary-hover: #0D6B6E;
+  --color-primary-soft: rgba(15, 127, 130, 0.12);
+  --color-navbar: #0F3F3F;
 
   --color-text: #111827;
   --color-text-dim: #6B7280;

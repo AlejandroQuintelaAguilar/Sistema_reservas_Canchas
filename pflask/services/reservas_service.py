@@ -23,6 +23,7 @@ from models.persona import Persona
 from models.reserva import Reserva
 from models.usuario import Usuario
 from services.auth_service import hash_password
+from validators.auth_validator import validar_password, validar_ci, validar_celular
 
 HORA_APERTURA = datetime.strptime("06:00", "%H:%M").time()
 HORA_CIERRE = datetime.strptime("23:00", "%H:%M").time()
@@ -1170,6 +1171,13 @@ def crear_cliente(datos):
         raise ValueError("email inválido.")
 
     nombre, apellido = _split_nombre(nombre_in, apellido_in)
+
+    try:
+        ci = validar_ci(ci, obligatorio=True)
+        celular = validar_celular(celular)
+        validar_password(contrasena)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
 
     if Persona.query.filter(Persona.ci == ci).first():
         raise ValueError(f"Ya existe una persona con CI '{ci}'.")
