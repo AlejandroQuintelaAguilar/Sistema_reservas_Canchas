@@ -7,6 +7,7 @@ from models.cancha import Cancha
 from models.categoria import Categoria
 from models.cliente import Cliente
 from models.empleado import Empleado
+from models.evento import Evento, evento_cancha
 from models.pago import Pago
 from models.persona import Persona
 from models.reserva import Reserva
@@ -88,6 +89,33 @@ def completar_reservas_pasadas():
     return len(completadas)
 
 
+def _hay_evento(id_cancha, fecha, hora_inicio, hora_fin):
+    try:
+        with db.session.begin_nested():
+            return (
+                Evento.query.outerjoin(
+                    evento_cancha, Evento.id_evento == evento_cancha.c.id_evento
+                )
+                .filter(
+                    db.or_(
+                        Evento.id_cancha == id_cancha,
+                        evento_cancha.c.id_cancha == id_cancha,
+                    ),
+                    Evento.fecha_evento == fecha,
+                    Evento.hora_inicio < hora_fin,
+                    Evento.hora_fin > hora_inicio,
+                )
+                .first()
+            )
+    except Exception:
+        return Evento.query.filter(
+            Evento.id_cancha == id_cancha,
+            Evento.fecha_evento == fecha,
+            Evento.hora_inicio < hora_fin,
+            Evento.hora_fin > hora_inicio,
+        ).first()
+
+
 def _hay_bloqueo(id_cancha, fecha, hora_inicio, hora_fin):
     return Bloqueo.query.filter(
         Bloqueo.id_cancha == id_cancha,
@@ -141,6 +169,11 @@ def _validaciones_reserva(fecha_reserva, hora_inicio, hora_fin, duracion_h=None,
         bloqueo = _hay_bloqueo(id_cancha, fecha_reserva, hora_inicio, hora_fin)
         if bloqueo:
             raise ValueError(f"La cancha está bloqueada: {bloqueo.motivo}")
+        evento_activo = _hay_evento(id_cancha, fecha_reserva, hora_inicio, hora_fin)
+        if evento_activo:
+            raise ValueError(
+                f"La cancha tiene programado el evento '{evento_activo.nombre_evento}' en ese horario."
+            )
         if _encontrar_choque(id_cancha, fecha_reserva, hora_inicio, hora_fin):
             raise ValueError("La cancha no está disponible en ese horario.")
         return cancha
@@ -562,6 +595,12 @@ def modificar_reserva_admin(id_reserva, datos):
     bloqueo = _hay_bloqueo(id_cancha, nueva_fecha, nueva_hora, nueva_hora_fin)
     if bloqueo:
         raise ValueError(f"La cancha está bloqueada: {bloqueo.motivo}")
+
+    evento_activo = _hay_evento(id_cancha, nueva_fecha, nueva_hora, nueva_hora_fin)
+    if evento_activo:
+        raise ValueError(
+            f"La cancha tiene programado el evento '{evento_activo.nombre_evento}' en el nuevo horario."
+        )
 
     choque = _encontrar_choque(id_cancha, nueva_fecha, nueva_hora, nueva_hora_fin, excluir_id=id_reserva)
     if choque:

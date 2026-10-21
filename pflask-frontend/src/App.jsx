@@ -77,7 +77,8 @@ function App() {
           <ProtectedRoute
             allowedRoles={[
               'admin',
-              'administrador'
+              'administrador',
+              'empleado'
             ]}
           >
             <AdminEventosPage />

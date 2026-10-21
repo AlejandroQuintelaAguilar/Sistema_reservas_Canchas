@@ -1,5 +1,13 @@
 import { api } from "./api";
-import type { Evento, CreateEventoDTO, UpdateEventoDTO } from "../types/evento.types";
+import type {
+  Evento,
+  CreateEventoDTO,
+  UpdateEventoDTO,
+  CheckDisponibilidadParams,
+  DisponibilidadEventoResponse,
+  AgendaDisponibilidadParams,
+  AgendaDisponibilidadResponse,
+} from "../types/evento.types";
 
 export const eventoService = {
   getAll: async (): Promise<Evento[]> => {
@@ -9,6 +17,50 @@ export const eventoService = {
 
   getById: async (id: number): Promise<Evento> => {
     const response = await api.get<Evento>(`/eventos/${id}`);
+    return response.data;
+  },
+
+  checkDisponibilidad: async (
+    params: CheckDisponibilidadParams
+  ): Promise<DisponibilidadEventoResponse> => {
+    const listaCanchas =
+      params.ids_canchas && params.ids_canchas.length > 0
+        ? params.ids_canchas
+        : params.id_cancha
+          ? [params.id_cancha]
+          : [];
+
+    const query = new URLSearchParams({
+      ids_canchas: listaCanchas.join(","),
+      fecha_evento: params.fecha_evento,
+      hora_inicio: params.hora_inicio,
+      hora_fin: params.hora_fin,
+    });
+    if (params.excluir_id) {
+      query.set("excluir_id", String(params.excluir_id));
+    }
+    const response = await api.get<DisponibilidadEventoResponse>(
+      `/eventos/disponibilidad?${query.toString()}`
+    );
+    return response.data;
+  },
+
+  getAgendaDisponibilidad: async (
+    params: AgendaDisponibilidadParams
+  ): Promise<AgendaDisponibilidadResponse> => {
+    const query = new URLSearchParams({
+      ids_canchas: params.ids_canchas.join(","),
+      fecha: params.fecha,
+    });
+    if (params.mes) {
+      query.set("mes", params.mes);
+    }
+    if (params.excluir_id) {
+      query.set("excluir_id", String(params.excluir_id));
+    }
+    const response = await api.get<AgendaDisponibilidadResponse>(
+      `/eventos/agenda-disponibilidad?${query.toString()}`
+    );
     return response.data;
   },
 

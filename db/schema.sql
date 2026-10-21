@@ -219,6 +219,7 @@ CREATE TABLE public.evento (
     hora_fin time without time zone NOT NULL,
     cupo_maximo integer,
     organizador character varying(100),
+    contacto character varying(30),
     descripcion text,
     id_cancha integer NOT NULL,
     CONSTRAINT chk_evento_horas CHECK ((hora_fin > hora_inicio)),

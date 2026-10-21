@@ -23,6 +23,60 @@ def get_eventos():
     except Exception as ex:
         return jsonify({"error": "Error al consultar los eventos", "detalle": str(ex)}), 500
 
+
+@eventos_bp.route("/disponibilidad", methods=["GET"])
+def check_disponibilidad():
+    try:
+        ids_canchas = request.args.get("ids_canchas") or request.args.get("id_cancha")
+        fecha = request.args.get("fecha_evento") or request.args.get("fecha")
+        hora_inicio = request.args.get("hora_inicio")
+        hora_fin = request.args.get("hora_fin")
+        excluir_id = request.args.get("excluir_id")
+
+        if not all([ids_canchas, fecha, hora_inicio, hora_fin]):
+            return jsonify({
+                "disponible": False,
+                "motivo": "Faltan parámetros requeridos (ids_canchas/id_cancha, fecha_evento, hora_inicio, hora_fin).",
+            }), 400
+
+        resultado = EventosService.verificar_disponibilidad_cancha(
+            ids_canchas=ids_canchas,
+            fecha_str=fecha,
+            hora_inicio_str=hora_inicio,
+            hora_fin_str=hora_fin,
+            id_evento_excluir=excluir_id,
+        )
+        return jsonify(resultado), 200
+    except Exception as ex:
+        return jsonify({"error": "Error al verificar disponibilidad", "detalle": str(ex)}), 500
+
+
+@eventos_bp.route("/agenda-disponibilidad", methods=["GET"])
+def get_agenda_disponibilidad():
+    try:
+        ids_canchas = request.args.get("ids_canchas") or request.args.get("id_cancha")
+        fecha = request.args.get("fecha_evento") or request.args.get("fecha")
+        mes = request.args.get("mes")
+        excluir_id = request.args.get("excluir_id")
+
+        if not ids_canchas or not fecha:
+            return jsonify({
+                "error": "Faltan parámetros requeridos (ids_canchas y fecha)."
+            }), 400
+
+        agenda = EventosService.obtener_agenda_ocupacion(
+            ids_canchas=ids_canchas,
+            fecha_str=fecha,
+            mes_str=mes,
+            id_evento_excluir=excluir_id,
+        )
+        return jsonify(agenda), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as ex:
+        return jsonify({"error": "Error al obtener la agenda de disponibilidad", "detalle": str(ex)}), 500
+
+
 @eventos_bp.route("/<int:id_evento>", methods=["GET"])
 def get_evento(id_evento):
     try:
@@ -32,6 +86,7 @@ def get_evento(id_evento):
         return jsonify(evento.to_dict()), 200
     except Exception as ex:
         return jsonify({"error": "Error al consultar el evento", "detalle": str(ex)}), 500
+
 
 @eventos_bp.route("", methods=["POST"])
 @require_auth(roles=["administrador", "empleado"])
@@ -49,8 +104,9 @@ def create_evento():
     except Exception as ex:
         return jsonify({"error": "Error interno al crear el evento", "detalle": str(ex)}), 500
 
+
 @eventos_bp.route("/<int:id_evento>", methods=["PUT"])
-@require_auth(roles=["administrador"])
+@require_auth(roles=["administrador", "empleado"])
 def update_evento(id_evento):
     try:
         data = request.get_json()
@@ -67,8 +123,9 @@ def update_evento(id_evento):
     except Exception as ex:
         return jsonify({"error": "Error al actualizar el evento", "detalle": str(ex)}), 500
 
+
 @eventos_bp.route("/<int:id_evento>", methods=["DELETE"])
-@require_auth(roles=["administrador"])
+@require_auth(roles=["administrador", "empleado"])
 def delete_evento(id_evento):
     try:
         eliminado = EventosService.delete_evento(id_evento)

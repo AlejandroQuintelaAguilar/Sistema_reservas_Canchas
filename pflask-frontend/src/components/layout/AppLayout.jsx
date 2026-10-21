@@ -6,9 +6,9 @@ const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", ic: "▦" },
   { to: "/eventos", label: "Eventos", ic: "✓" },
   { to: "/reservas", label: "Reservas", ic: "▤" },
-  { to: "/pagos", label: "Pagos", ic: "₳", admin: true },
-  { to: "/admin/eventos", label: "Administración", ic: "◔", admin: true },
-  { to: "/reportes", label: "Reportes", ic: "📊", admin: true },
+  { to: "/pagos", label: "Pagos", ic: "₳", roles: ["admin", "administrador", "empleado"] },
+  { to: "/admin/eventos", label: "Administración", ic: "◔", roles: ["admin", "administrador", "empleado"] },
+  { to: "/reportes", label: "Reportes", ic: "📊", roles: ["admin", "administrador"] },
 ];
 
 export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
@@ -22,8 +22,9 @@ export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
     user?.username?.[0] ||
     "U";
 
+  const currentRole = user?.role || user?.rol;
   const items = NAV_ITEMS.filter(
-    (item) => !item.admin || ["admin", "administrador"].includes(user?.role),
+    (item) => !item.roles || item.roles.includes(currentRole),
   );
 
   const handleLogout = () => {

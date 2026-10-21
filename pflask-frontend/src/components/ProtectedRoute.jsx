@@ -10,7 +10,8 @@ export const ProtectedRoute = ({ children, allowedRoles }) => {
   }
 
   // 2. Si la ruta exige un rol específico (ej. "admin") y el usuario no lo tiene, lo bloqueamos
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  const currentRole = user.role || user.rol;
+  if (allowedRoles && !allowedRoles.includes(currentRole)) {
     return <Navigate to="/unauthorized" replace />; 
   }
 

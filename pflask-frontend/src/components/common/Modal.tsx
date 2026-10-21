@@ -5,9 +5,16 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  maxWidth?: string;
 }
 
-export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
+export const Modal: React.FC<ModalProps> = ({
+  isOpen,
+  onClose,
+  title,
+  children,
+  maxWidth = "550px",
+}) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -52,8 +59,8 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }
           color: "var(--color-text, #111827)",
           borderRadius: "12px",
           width: "100%",
-          maxWidth: "550px",
-          maxHeight: "90vh",
+          maxWidth,
+          maxHeight: "92vh",
           overflowY: "auto",
           boxShadow: "var(--shadow-lg, 0 20px 60px rgba(17, 24, 39, 0.18))",
           border: "1px solid var(--color-border, #e5e7eb)",
@@ -69,7 +76,14 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }
             borderBottom: "1px solid var(--color-border, #e5e7eb)",
           }}
         >
-          <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 600, color: "var(--color-text, #111827)" }}>
+          <h3
+            style={{
+              margin: 0,
+              fontSize: "1.2rem",
+              fontWeight: 600,
+              color: "var(--color-text, #111827)",
+            }}
+          >
             {title}
           </h3>
           <button

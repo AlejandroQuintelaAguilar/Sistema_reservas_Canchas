@@ -167,3 +167,28 @@ FROM information_schema.tables t
 WHERE table_schema = 'public' 
   AND table_name IN ('bloqueo', 'reserva', 'cancha', 'categoria', 'pago')
 ORDER BY table_name;
+
+
+-- =====================================================================
+-- SCRIPT DE ACTUALIZACIÓN
+-- Iteración: Gestión de Eventos (Reserva de Una o Más Canchas por Evento)
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.evento_cancha (
+    id_evento INTEGER NOT NULL
+        REFERENCES public.evento(id_evento) ON DELETE CASCADE ON UPDATE CASCADE,
+    id_cancha INTEGER NOT NULL
+        REFERENCES public.cancha(id_cancha) ON DELETE RESTRICT ON UPDATE CASCADE,
+    PRIMARY KEY (id_evento, id_cancha)
+);
+
+CREATE INDEX IF NOT EXISTS idx_evento_cancha_cancha
+    ON public.evento_cancha (id_cancha);
+
+INSERT INTO public.evento_cancha (id_evento, id_cancha)
+SELECT id_evento, id_cancha FROM public.evento
+ON CONFLICT (id_evento, id_cancha) DO NOTHING;
+
+-- Añadir columna opcional de teléfono/WhatsApp de contacto a evento
+ALTER TABLE public.evento
+    ADD COLUMN IF NOT EXISTS contacto VARCHAR(30);
