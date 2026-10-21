@@ -2,13 +2,23 @@ import { useState } from "react";
 import { useNavigate, NavLink } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 
+// El backend permite operar la caja (abrir turno, arqueo, validar pagos) tanto
+// al administrador como al empleado: ROLES_OPERACION en pagos_controller.
+const ROLES_OPERACION_UI = ["admin", "administrador", "empleado"];
+const ROLES_ADMIN_UI = ["admin", "administrador"];
+
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", ic: "▦" },
   { to: "/eventos", label: "Eventos", ic: "✓" },
   { to: "/reservas", label: "Reservas", ic: "▤" },
-  { to: "/pagos", label: "Pagos", ic: "₳", roles: ["admin", "administrador", "empleado"] },
-  { to: "/admin/eventos", label: "Administración", ic: "◔", roles: ["admin", "administrador", "empleado"] },
-  { to: "/reportes", label: "Reportes", ic: "📊", roles: ["admin", "administrador"] },
+  // Caja y pagos son el mismo modulo (PagosPage, con pestañas internas): una
+  // sola entrada al menu. /caja queda como alias que redirige a /pagos para no
+  // romper enlaces guardados.
+  { to: "/pagos", label: "Caja y Pagos", ic: "₳", roles: ROLES_OPERACION_UI },
+  { to: "/admin/canchas", label: "Canchas", ic: "◉", roles: ROLES_ADMIN_UI },
+  { to: "/admin/eventos", label: "Administración", ic: "◔", roles: ROLES_OPERACION_UI },
+  { to: "/reportes", label: "Reportes", ic: "📊", roles: ROLES_ADMIN_UI },
+  { to: "/analitica", label: "Analitica", ic: "◧", roles: ROLES_ADMIN_UI },
 ];
 
 export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
@@ -23,9 +33,11 @@ export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
     "U";
 
   const currentRole = user?.role || user?.rol;
-  const items = NAV_ITEMS.filter(
-    (item) => !item.roles || item.roles.includes(currentRole),
-  );
+  const items = NAV_ITEMS.filter((item) => {
+    if (item.admin) return ["admin", "administrador"].includes(currentRole);
+    if (item.roles) return item.roles.includes(currentRole);
+    return true;
+  });
 
   const handleLogout = () => {
     logout();
@@ -71,6 +83,8 @@ export const AppLayout = ({ children, title = "Panel", subtitle = "" }) => {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar..."
+              disabled
+              title="Buscador deshabilitado (no funcional)"
             />
           </div>
           <div className="user">

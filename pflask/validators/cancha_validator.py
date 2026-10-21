@@ -38,6 +38,26 @@ def convertir_id_entero(valor, nombre):
     return valor
 
 
+def convertir_hora(valor, nombre="horario"):
+    """Convierte 'HH:MM' a datetime.time. Acepta datetime.time sin cambios."""
+    from datetime import time as _time
+
+    if valor is None or valor == "":
+        return None
+    if isinstance(valor, _time):
+        return valor
+    if not isinstance(valor, str):
+        raise ValueError(f"{nombre} debe tener el formato HH:MM.")
+    try:
+        horas, minutos = valor.strip().split(":")
+        h, m = int(horas), int(minutos)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError
+        return _time(h, m)
+    except (ValueError, AttributeError):
+        raise ValueError(f"{nombre} debe tener el formato HH:MM (ej. 06:00).")
+
+
 def convertir_bool(valor, nombre="techada"):
     if isinstance(valor, bool):
         return valor

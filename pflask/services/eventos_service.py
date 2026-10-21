@@ -7,6 +7,9 @@ from models.evento import Evento, evento_cancha
 
 HORA_APERTURA_COMPLEJO = time(6, 0)
 HORA_CIERRE_COMPLEJO = time(23, 0)
+ESTADOS_RESERVA_ACTIVOS = ("pendiente", "confirmada")
+TIPOS_EVENTO_VALIDOS = ("Deportivo", "Social", "Servicio Social")
+TIPO_EVENTO_PUBLICO = "Servicio Social"
 
 
 class EventosService:
@@ -64,9 +67,30 @@ class EventosService:
         return []
 
     @classmethod
-    def get_all_eventos(cls):
+    def get_all_eventos(cls, tipo=None, solo_vigentes=False):
+        """Eventos ordenados por fecha y hora de inicio.
+
+        Soporta filtrado opcional por tipo_evento y por vigencia (eventos futuros
+        o del día actual que aún no terminaron).
+        """
         cls._asegurar_tabla_evento_cancha()
-        return Evento.query.order_by(Evento.fecha_evento.asc(), Evento.hora_inicio.asc()).all()
+        consulta = Evento.query
+        if tipo:
+            consulta = consulta.filter(Evento.tipo_evento == tipo)
+        if solo_vigentes:
+            ahora = datetime.now()
+            consulta = consulta.filter(
+                db.or_(
+                    Evento.fecha_evento > ahora.date(),
+                    db.and_(
+                        Evento.fecha_evento == ahora.date(),
+                        Evento.hora_fin > ahora.time(),
+                    ),
+                )
+            )
+        return consulta.order_by(
+            Evento.fecha_evento.asc(), Evento.hora_inicio.asc()
+        ).all()
 
     @classmethod
     def get_evento_by_id(cls, id_evento):

@@ -1,15 +1,17 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from services import canchas_service
-from validators.cancha_validator import validar_datos_cancha
+from services.auth_service import _extract_bearer_token, decode_token, require_auth
 from utils.responses import error_json
+from validators.cancha_validator import validar_datos_cancha
 
 canchas_bp = Blueprint("canchas", __name__, url_prefix="/api/canchas")
 
 
 @canchas_bp.post("")
+@require_auth(roles=["administrador"])
 def crear_cancha():
     data = request.get_json(silent=True)
 
@@ -35,11 +37,28 @@ def crear_cancha():
         return error_json("Error interno al registrar la cancha.", str(e), 500)
 
 
+def _rol_de_token():
+    token = _extract_bearer_token()
+    if not token:
+        return None
+    try:
+        payload = decode_token(token, expected_type="access")
+        return payload.get("rol")
+    except Exception:
+        return None
+
+
 @canchas_bp.get("")
 def obtener_canchas():
     try:
-        estado = request.args.get("estado")
-        canchas = canchas_service.listar_canchas(estado)
+        rol = _rol_de_token()
+        # Empleado y administrador ven todas (pueden filtrar por estado).
+        # Cliente y público ven únicamente las Disponibles.
+        if rol in ("empleado", "administrador"):
+            estado = request.args.get("estado")
+            canchas = canchas_service.listar_canchas(estado)
+        else:
+            canchas = canchas_service.listar_canchas("disponible")
         return jsonify([c.to_dict() for c in canchas]), 200
     except ValueError as e:
         return error_json(str(e))
@@ -59,7 +78,25 @@ def obtener_cancha(id_cancha):
         return error_json(str(e), codigo=404)
 
 
+@canchas_bp.get("/<int:id_cancha>/disponibilidad")
+def obtener_disponibilidad(id_cancha):
+    """Slots libres de una cancha en una fecha, con la duración pedida."""
+    fecha = request.args.get("fecha")
+    duracion = request.args.get("duracion", 1)
+    try:
+        if not fecha:
+            return error_json("El parámetro 'fecha' es obligatorio.")
+        return jsonify(
+            canchas_service.consultar_disponibilidad(id_cancha, fecha, duracion)
+        ), 200
+    except ValueError as e:
+        return error_json(str(e), codigo=400)
+    except Exception as e:
+        return error_json("Error interno al obtener disponibilidad.", str(e), 500)
+
+
 @canchas_bp.patch("/<int:id_cancha>")
+@require_auth(roles=["administrador"])
 def modificar_cancha(id_cancha):
     if id_cancha <= 0:
         return error_json("El id_cancha debe ser mayor que 0.")
@@ -68,7 +105,9 @@ def modificar_cancha(id_cancha):
 
     try:
         datos_texto = validar_datos_cancha(data, parcial=True)
-        cancha = canchas_service.modificar_cancha(id_cancha, datos_texto, data)
+        cancha = canchas_service.modificar_cancha(
+            id_cancha, datos_texto, data, id_usuario=getattr(g, "current_user", None).id_usuario
+        )
 
         return jsonify({
             "mensaje": "Cancha modificada con éxito.",
@@ -91,6 +130,7 @@ def modificar_cancha(id_cancha):
 
 
 @canchas_bp.delete("/<int:id_cancha>")
+@require_auth(roles=["administrador"])
 def eliminar_cancha(id_cancha):
     if id_cancha <= 0:
         return error_json("El id_cancha debe ser mayor que 0.")
@@ -100,7 +140,10 @@ def eliminar_cancha(id_cancha):
         return jsonify({"mensaje": "Cancha retirada con éxito."}), 200
 
     except ValueError as e:
-        return error_json(str(e), codigo=404)
+        db.session.rollback()
+        mensaje = str(e)
+        codigo = 404 if "no existe" in mensaje.lower() else 409
+        return error_json(mensaje, codigo=codigo)
 
     except IntegrityError:
         db.session.rollback()
@@ -117,6 +160,7 @@ def eliminar_cancha(id_cancha):
 
 
 @canchas_bp.patch("/<int:id_cancha>/estado")
+@require_auth(roles=["administrador"])
 def cambiar_estado_cancha(id_cancha):
     if id_cancha <= 0:
         return error_json("El id_cancha debe ser mayor que 0.")
@@ -126,7 +170,12 @@ def cambiar_estado_cancha(id_cancha):
         return error_json("El cuerpo de la solicitud debe ser un objeto JSON válido.")
 
     try:
-        cancha = canchas_service.cambiar_estado_cancha(id_cancha, data.get("estado"))
+        cancha = canchas_service.cambiar_estado_cancha(
+            id_cancha,
+            data.get("estado"),
+            motivo=data.get("motivo"),
+            id_usuario=getattr(g, "current_user", None).id_usuario,
+        )
 
         return jsonify({
             "mensaje": f"Estado actualizado a {cancha.estado}.",

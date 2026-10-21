@@ -39,6 +39,11 @@ export const authService = {
     return response.data;
   },
 
+  logout: async () => {
+    const response = await axiosClient.post('/auth/logout');
+    return response.data;
+  },
+
   obtenerUsuarios: async () => {
     const response = await axiosClient.get('/admin/users');
     return response.data;

@@ -5,28 +5,42 @@ import * as yup from "yup";
 import { Link } from "react-router-dom";
 
 import { authService } from "../services/authService";
+import {
+  CI_RE,
+  CELULAR_RE,
+  USERNAME_RE,
+  REQUISITOS_PASSWORD,
+  esquemaContrasena,
+  soloDigitos,
+  soloDigitosCelular,
+} from "../utils/validaciones";
 
 const schema = yup
   .object({
-    nombre: yup.string().required("El nombre es obligatorio."),
-    apellido: yup.string().required("El apellido es obligatorio."),
-    ci: yup.string().required("El CI es obligatorio."),
-    celular: yup.string().required("El celular es obligatorio."),
+    // trim antes de required: el required de yup rechaza "" pero no "   ".
+    nombre: yup.string().trim().required("El nombre es obligatorio."),
+    apellido: yup.string().trim().required("El apellido es obligatorio."),
+    ci: yup
+      .string()
+      .trim()
+      .required("El CI es obligatorio.")
+      .matches(CI_RE, "El CI debe tener entre 4 y 10 dígitos, sin letras."),
+    celular: yup
+      .string()
+      .trim()
+      .required("El celular es obligatorio.")
+      .matches(CELULAR_RE, "El celular debe tener entre 7 y 15 dígitos."),
     email: yup
       .string()
+      .trim()
       .required("El correo es obligatorio.")
       .email("Debe ser un correo válido."),
-    username: yup.string().required("El nombre de usuario es obligatorio."),
-    password: yup
+    username: yup
       .string()
-      .required("La contraseña es obligatoria.")
-      .min(8, "Mínimo 8 caracteres.")
-      .matches(/[A-Z]/, "Debe tener una mayúscula.")
-      .matches(/[^A-Za-z0-9]/, "Debe tener un símbolo."),
-    confirmPassword: yup
-      .string()
-      .oneOf([yup.ref("password")], "Las contraseñas no coinciden.")
-      .required("Confirma la contraseña."),
+      .trim()
+      .required("El nombre de usuario es obligatorio.")
+      .matches(USERNAME_RE, "Entre 4 y 30 caracteres: letras, números, punto, guion o guion bajo."),
+    ...esquemaContrasena(yup, "password", "confirmPassword"),
   })
   .required();
 
@@ -34,11 +48,20 @@ const RegisterPage = () => {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm({ resolver: yupResolver(schema) });
 
   const [message, setMessage] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Deja solo digitos en el campo mientras se escribe: la letra no llega a
+  // mostrarse y el dato nunca se envia invalido.
+  const filtrarDigitos = (campo, limpiar) => (event) => {
+    const limpio = limpiar(event.target.value);
+    event.target.value = limpio;
+    setValue(campo, limpio, { shouldValidate: false });
+  };
 
   const onSubmit = async (data) => {
     setMessage("");
@@ -98,7 +121,13 @@ const RegisterPage = () => {
           <div className="form-row">
             <div className="form-group">
               <label>CI</label>
-              <input type="text" placeholder="1234567" {...register("ci")} />
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="1234567"
+                {...register("ci")}
+                onChange={filtrarDigitos("ci", soloDigitos)}
+              />
               {errors.ci && (
                 <span className="campo-error">{errors.ci.message}</span>
               )}
@@ -107,8 +136,10 @@ const RegisterPage = () => {
               <label>Celular</label>
               <input
                 type="text"
+                inputMode="tel"
                 placeholder="+591 70000000"
                 {...register("celular")}
+                onChange={filtrarDigitos("celular", soloDigitosCelular)}
               />
               {errors.celular && (
                 <span className="campo-error">{errors.celular.message}</span>
@@ -144,11 +175,15 @@ const RegisterPage = () => {
             <label>Contraseña</label>
             <input
               type="password"
+              autoComplete="new-password"
               placeholder="Mínimo 8 caracteres"
               {...register("password")}
             />
             {errors.password && (
               <span className="campo-error">{errors.password.message}</span>
+            )}
+            {!errors.password && (
+              <small className="hint">{REQUISITOS_PASSWORD}</small>
             )}
           </div>
 
@@ -156,6 +191,7 @@ const RegisterPage = () => {
             <label>Confirmar contraseña</label>
             <input
               type="password"
+              autoComplete="new-password"
               placeholder="Repite la contraseña"
               {...register("confirmPassword")}
             />

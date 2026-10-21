@@ -1,10 +1,17 @@
+"""Validaciones de forma del pago.
+
+Las reglas de negocio (saldo, idempotencia, estados permitidos para aprobar,
+rechazar o devolver) viven en services/pagos_service.py; aquí solo se revisa
+el formato de los datos que llegan por la API.
+"""
+
 from datetime import datetime
 
-ESTADOS_PAGO = {
-    "pendiente",
-    "pagado",
-    "reembolsado",
-}
+from models.pago import ESTADOS_PAGO, ETIQUETA_ESTADO, METODOS_PAGO_VALIDOS
+
+ESTADOS_PAGO_ETIQUETAS = ", ".join(
+    f"{e} ({ETIQUETA_ESTADO[e]})" for e in ESTADOS_PAGO
+)
 
 
 def _validar_fecha(valor):
@@ -43,7 +50,13 @@ def validar_datos_pago(data, parcial=False):
             raise ValueError("metodo_pago es obligatorio.")
         if len(metodo.strip()) > 50:
             raise ValueError("metodo_pago no puede superar 50 caracteres.")
-        resultado["metodo_pago"] = metodo.strip()
+        if metodo.strip().lower() not in METODOS_PAGO_VALIDOS:
+            raise ValueError(
+                "Método de pago no válido. Use: "
+                + ", ".join(METODOS_PAGO_VALIDOS)
+                + "."
+            )
+        resultado["metodo_pago"] = metodo.strip().lower()
 
     if "comprobante" in data:
         comprobante = data.get("comprobante")
@@ -59,9 +72,7 @@ def validar_datos_pago(data, parcial=False):
             raise ValueError("estado_pago debe ser un texto válido.")
         estado = estado.strip().lower()
         if estado not in ESTADOS_PAGO:
-            raise ValueError(
-                "Estado no válido. Use: pendiente, pagado o reembolsado."
-            )
+            raise ValueError(f"Estado no válido. Use: {ESTADOS_PAGO_ETIQUETAS}.")
         resultado["estado_pago"] = estado
 
     if not parcial or "monto" in data:
@@ -92,7 +103,5 @@ def validar_estado_pago(estado):
         raise ValueError("estado_pago debe ser un texto válido.")
     estado = estado.strip().lower()
     if estado not in ESTADOS_PAGO:
-        raise ValueError(
-            "Estado no válido. Use: pendiente, pagado o reembolsado."
-        )
+        raise ValueError(f"Estado no válido. Use: {ESTADOS_PAGO_ETIQUETAS}.")
     return estado

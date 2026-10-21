@@ -1,6 +1,6 @@
 import re
 import secrets
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
@@ -12,15 +12,21 @@ from models.empleado import Empleado
 from models.persona import Persona
 from models.usuario import Usuario
 from services.auth_service import (
+    BLOQUEO_MINUTOS,
+    MAX_INTENTOS_LOGIN,
+    _extract_bearer_token,
     create_reset_token,
     create_token,
     decode_token,
     frontend_role,
     hash_password,
+    limpiar_tokens_expirados,
     require_auth,
+    revocar_token,
     verify_password,
 )
 from services.email_service import send_recovery_email, smtp_is_configured
+from validators.auth_validator import validar_password, validar_ci, validar_celular
 
 auth_bp = Blueprint("auth", __name__)
 admin_bp = Blueprint("admin", __name__)
@@ -65,8 +71,9 @@ def _unique_ci(preferred=None):
         existing = Persona.query.filter_by(ci=preferred).first()
         if not existing:
             return preferred[:20]
+    # Solo digitos: el CI se guarda siempre numerico, igual que valida el frontend.
     for _ in range(20):
-        ci = secrets.token_hex(8)[:20]
+        ci = str(secrets.randbelow(10**9)).zfill(9)
         if not Persona.query.filter_by(ci=ci).first():
             return ci
     raise RuntimeError("No se pudo generar un CI único")
@@ -195,14 +202,43 @@ def login():
     if not identifier or not password:
         return jsonify({"error": "Se requiere username/email y contrasena"}), 400
 
+    limpiar_tokens_expirados()
+
+    max_intentos = int(current_app.config.get("MAX_LOGIN_ATTEMPTS", MAX_INTENTOS_LOGIN))
+    bloqueo_minutos = int(current_app.config.get("BLOQUEO_MINUTOS", BLOQUEO_MINUTOS))
+    ahora = datetime.now()
+
     user = Usuario.query.filter(Usuario.username.ilike(identifier)).first()
     if not user:
         persona = Persona.query.filter(Persona.email.ilike(identifier)).first()
         if persona:
             user = Usuario.query.filter_by(id_persona=persona.id_persona).first()
 
-    if not user or not verify_password(user.contrasena, password):
-        return jsonify({"error": "Credenciales incorrectas"}), 401
+    # Respuesta genérica para no revelar qué cuentas existen.
+    error_login = jsonify({"error": "Credenciales incorrectas"}), 401
+
+    if not user:
+        return error_login
+
+    # Cuenta desactivada o bloqueada temporalmente: mismo mensaje genérico.
+    if user.estado != "activo":
+        return error_login
+
+    if user.bloqueado_hasta and user.bloqueado_hasta.replace(tzinfo=None) > ahora:
+        return error_login
+
+    if not verify_password(user.contrasena, password):
+        user.intentos_fallidos = (user.intentos_fallidos or 0) + 1
+        if user.intentos_fallidos >= max_intentos:
+            user.bloqueado_hasta = ahora + timedelta(minutes=bloqueo_minutos)
+            user.intentos_fallidos = 0
+        db.session.commit()
+        return error_login
+
+    # Éxito: se resetea el contador y el bloqueo.
+    user.intentos_fallidos = 0
+    user.bloqueado_hasta = None
+    db.session.commit()
 
     if not user.contrasena.startswith(("pbkdf2:", "scrypt:", "argon2:")):
         user.contrasena = hash_password(password)
@@ -211,6 +247,23 @@ def login():
     payload = _serialize_user(user)
     payload["token"] = create_token(user)
     return jsonify(payload), 200
+
+
+@auth_bp.route("/auth/logout", methods=["POST"])
+@require_auth()
+def logout():
+    token = _extract_bearer_token()
+    if token:
+        try:
+            payload = decode_token(token, expected_type="access")
+            revocar_token(
+                payload.get("jti"),
+                int(payload["sub"]),
+                datetime.utcfromtimestamp(payload["exp"]),
+            )
+        except Exception:
+            current_app.logger.exception("Error al revocar token en logout")
+    return jsonify({"message": "Sesión cerrada"}), 200
 
 
 @auth_bp.route("/auth/register", methods=["POST"])
@@ -228,8 +281,12 @@ def register():
         return jsonify({"error": "nombre, email y contrasena son obligatorios"}), 400
     if "@" not in email:
         return jsonify({"error": "email inválido"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "La contraseña debe tener al menos 8 caracteres"}), 400
+    try:
+        ci_in = validar_ci(ci_in)
+        celular = validar_celular(celular)
+        validar_password(password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     if Persona.query.filter(Persona.email.ilike(email)).first():
         return jsonify({"error": "El email ya está registrado"}), 409
@@ -289,8 +346,10 @@ def recover():
     persona = Persona.query.filter(Persona.email.ilike(email)).first()
     if persona:
         user = Usuario.query.filter_by(id_persona=persona.id_persona).first()
-        if user:
-            token = create_reset_token(user)
+        if user and user.estado == "activo":
+            token, jti, _ = create_reset_token(user)
+            user.reset_token_jti = jti
+            db.session.commit()
             frontend = current_app.config.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
             recover_url = f"{frontend}/reset-password/{token}"
             destino = persona.email
@@ -323,8 +382,10 @@ def reset():
 
     if not token or not password:
         return jsonify({"error": "token y contrasena son obligatorios"}), 400
-    if len(password) < 8:
-        return jsonify({"error": "La contraseña debe tener al menos 8 caracteres"}), 400
+    try:
+        validar_password(password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     try:
         payload = decode_token(token, expected_type="reset")
@@ -335,7 +396,12 @@ def reset():
     if not user:
         return jsonify({"error": "El enlace es inválido o ha expirado"}), 400
 
+    # Uso único: el token debe coincidir con el jti almacenado.
+    if not user.reset_token_jti or user.reset_token_jti != payload.get("jti"):
+        return jsonify({"error": "El enlace es inválido o ha expirado"}), 400
+
     user.contrasena = hash_password(password)
+    user.reset_token_jti = None
     db.session.commit()
     return jsonify({"message": "Contraseña actualizada"}), 200
 
@@ -382,6 +448,18 @@ def update_user(user_id):
             if otros == 0:
                 return jsonify({"error": "No puedes quitar el último administrador"}), 400
 
+    estado = data.get("estado")
+    if estado is not None:
+        estado = str(estado).strip().lower()
+        if estado not in ("activo", "inactivo"):
+            return jsonify({"error": "Estado inválido. Usa activo o inactivo"}), 400
+        if user.id_usuario == g.current_user.id_usuario and estado == "inactivo":
+            return jsonify({"error": "No puedes desactivar tu propia cuenta"}), 400
+        user.estado = estado
+        if estado == "activo":
+            user.intentos_fallidos = 0
+            user.bloqueado_hasta = None
+
     nombre = data.get("nombre")
     apellido = data.get("apellido")
     ci = data.get("ci")
@@ -401,7 +479,10 @@ def update_user(user_id):
             return jsonify({"error": "El apellido no puede estar vacío"}), 400
         persona.apellido = apellido[:80]
     if ci is not None:
-        ci = str(ci).strip()
+        try:
+            ci = validar_ci(ci, obligatorio=False)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         if not ci:
             return jsonify({"error": "El CI no puede estar vacío"}), 400
         duplicado = Persona.query.filter(Persona.ci == ci, Persona.id_persona != persona.id_persona).first()
@@ -409,7 +490,11 @@ def update_user(user_id):
             return jsonify({"error": "Ese CI ya está registrado"}), 409
         persona.ci = ci[:20]
     if "celular" in data:
-        persona.celular = (str(celular).strip()[:20] if celular else None)
+        try:
+            celular_l = validar_celular(data.get("celular"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        persona.celular = celular_l if celular_l else None
     if email is not None:
         email = str(email).strip().lower()
         if email and "@" not in email:
@@ -434,8 +519,10 @@ def update_user(user_id):
             return jsonify({"error": "Ese username ya está registrado"}), 409
         user.username = username[:50]
     if password:
-        if len(str(password)) < 8:
-            return jsonify({"error": "La contraseña debe tener al menos 8 caracteres"}), 400
+        try:
+            validar_password(str(password))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         user.contrasena = hash_password(str(password))
 
     try:
@@ -485,6 +572,14 @@ def delete_user(user_id):
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
+        # El usuario tiene historial (reservas, etc.): se DESACTIVA en vez de borrarlo.
+        user = db.session.get(Usuario, user_id)
+        if user:
+            user.estado = "inactivo"
+            db.session.commit()
+            return jsonify({
+                "message": "El usuario tiene registros relacionados. Se desactivó la cuenta (no se borra)."
+            }), 200
         return jsonify({
             "error": "No se puede eliminar el usuario porque tiene registros relacionados (reservas u otros)."
         }), 409
@@ -513,8 +608,10 @@ def register_auth(app):
         app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-change-me")
     app.config["JWT_EXPIRES_HOURS"] = int(os.getenv("JWT_EXPIRES_HOURS", "12"))
     app.config["RESET_TOKEN_EXPIRES_SECONDS"] = int(
-        os.getenv("RESET_TOKEN_EXPIRES_SECONDS", "3600")
+        os.getenv("RESET_TOKEN_EXPIRES_SECONDS", "1800")
     )
+    app.config["MAX_LOGIN_ATTEMPTS"] = int(os.getenv("MAX_LOGIN_ATTEMPTS", "5"))
+    app.config["BLOQUEO_MINUTOS"] = int(os.getenv("BLOQUEO_MINUTOS", "15"))
     app.config["FRONTEND_URL"] = os.getenv("FRONTEND_URL", "http://localhost:5173")
     app.config["SMTP_HOST"] = os.getenv("SMTP_HOST", "").strip()
     app.config["SMTP_PORT"] = os.getenv("SMTP_PORT", "587").strip()

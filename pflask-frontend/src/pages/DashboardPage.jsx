@@ -3,6 +3,13 @@ import { useAuth } from "../context/AuthContext";
 import AppLayout from "../components/layout/AppLayout";
 import { api } from "../services/api";
 import { authService } from "../services/authService";
+import {
+  REQUISITOS_PASSWORD,
+  erroresContrasena,
+  validarFormularioUsuario,
+  soloDigitos,
+  soloDigitosCelular,
+} from "../utils/validaciones";
 
 const DIAS = ["L", "M", "X", "J", "V", "S", "D"];
 
@@ -50,19 +57,26 @@ const DashboardPage = () => {
   useEffect(() => {
     const cargarDatos = async () => {
       try {
-        const [ev, ca, pa, an] = await Promise.all([
+        // /analitica es privado del administrador. Si se pidiera siempre, el
+        // 403 de un cliente o empleado tumbaria todo el Promise.all y el
+        // dashboard se quedaria vacio para esos roles.
+        // /pagos tambien se restringe al administrador: un empleado o un
+        // cliente no tienen por que ver la caja del complejo.
+        const [ev, ca, pa] = await Promise.all([
           api.get("/eventos"),
           api.get("/canchas"),
-          api.get("/pagos"),
-          api.get("/analitica"),
+          esAdmin ? api.get("/pagos") : Promise.resolve({ data: [] }),
         ]);
         setEventos(ev.data);
         setCanchas(ca.data);
-        setPagos(pa.data);
-        setAnalitica(an.data);
+        setPagos(pa.data || []);
         if (esAdmin) {
           try {
-            const u = await authService.obtenerUsuarios();
+            const [an, u] = await Promise.all([
+              api.get("/analitica"),
+              authService.obtenerUsuarios(),
+            ]);
+            setAnalitica(an.data);
             setUsers(u);
           } catch (e) {
             /* sin permisos */
@@ -186,7 +200,11 @@ const DashboardPage = () => {
 
   const handleFormChange = (event) => {
     const { name, value } = event.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    // CI y celular son numericos: se filtran al escribir para no guardar letras.
+    let limpio = value;
+    if (name === "ci") limpio = soloDigitos(value);
+    else if (name === "celular") limpio = soloDigitosCelular(value);
+    setForm((prev) => ({ ...prev, [name]: limpio }));
   };
 
   const handleGuardar = async (event) => {
@@ -211,6 +229,14 @@ const DashboardPage = () => {
         username: form.username,
       };
       if (form.password.trim()) {
+        // Al editar, cambiar la clave es opcional, pero si se escribe algo
+        // tiene que cumplir la misma regla que en el registro.
+        const errorPwd = erroresContrasena(form.password).join(" ");
+        if (errorPwd) {
+          setErrorMsg(`La contraseña no cumple la política: ${errorPwd}`);
+          setSaving(false);
+          return;
+        }
         payload.password = form.password;
         payload.contrasena = form.password;
       }
@@ -229,10 +255,19 @@ const DashboardPage = () => {
 
   const handleCrear = async (event) => {
     event.preventDefault();
-    if (!form.nombre.trim() || !form.email.trim()) return;
     setSaving(true);
     setErrorMsg("");
     setSuccessMsg("");
+
+    // Antes esto hacia `return` en silencio: el usuario pulsaba Guardar y no
+    // pasaba nada, sin saber que faltaba el nombre o el correo.
+    const falla = validarFormularioUsuario(form, { passwordObligatoria: true });
+    if (falla) {
+      setErrorMsg(falla);
+      setSaving(false);
+      return;
+    }
+
     try {
       const nuevo = await authService.crearUsuario({
         nombre: form.nombre,
@@ -259,6 +294,8 @@ const DashboardPage = () => {
     }
   };
 
+  // Los indicadores de caja solo son del administrador: el empleado registra
+  // pagos, pero el total recaudado del complejo no le corresponde verlo.
   const stats = [
     {
       label: "Eventos totales",
@@ -271,16 +308,20 @@ const DashboardPage = () => {
       value: canchasDisponibles,
       foot: canchasMantenimiento + " en mantenimiento",
     },
-    {
-      label: "Pagos recibidos",
-      value: pagosConfirmados.length,
-      foot: pagosPendientes + " pendientes",
-    },
-    {
-      label: "Ingresos",
-      value: "Bs " + ingresos.toFixed(2),
-      foot: "Confirmados",
-    },
+    ...(esAdmin
+      ? [
+          {
+            label: "Pagos recibidos",
+            value: pagosConfirmados.length,
+            foot: pagosPendientes + " pendientes",
+          },
+          {
+            label: "Ingresos",
+            value: "Bs " + ingresos.toFixed(2),
+            foot: "Confirmados",
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -351,36 +392,40 @@ const DashboardPage = () => {
               </div>
             </div>
 
-            {/* Recordatorios */}
-            <div className="panel">
-              <div className="panel-head">
-                <h3>Recordatorios</h3>
-                <span className="hint" style={{ margin: 0 }}>
-                  Pagos
-                </span>
-              </div>
-              <div>
-                {pagosPendientes === 0 ? (
-                  <p className="hint">No hay pagos pendientes.</p>
-                ) : (
-                  <div className="reminder-card">
-                    <b>{pagosPendientes} pago(s) pendiente(s)</b>
-                    <div className="reminder-time">
-                      🕐 Revisar estado de pagos
+            {esAdmin && (
+              /* Recordatorios */
+              <div className="panel">
+                <div className="panel-head">
+                  <h3>Recordatorios</h3>
+                  <span className="hint" style={{ margin: 0 }}>
+                    Pagos
+                  </span>
+                </div>
+                <div>
+                  {pagosPendientes === 0 ? (
+                    <p className="hint">No hay pagos pendientes.</p>
+                  ) : (
+                    <div className="reminder-card">
+                      <b>{pagosPendientes} pago(s) pendiente(s)</b>
+                      <div className="reminder-time">
+                        🕐 Revisar estado de pagos
+                      </div>
+                      <button
+                        className="btn-start"
+                        onClick={() => setSeconds(0)}
+                      >
+                        Marcar como revisado
+                      </button>
                     </div>
-                    <button
-                      className="btn-start"
-                      onClick={() => setSeconds(0)}
-                    >
-                      Marcar como revisado
-                    </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* ---------- PANELES ANALÍTICOS (vistas SQL) ---------- */}
+          {esAdmin && (
+            <>
           <div className="header-row" style={{ marginTop: "30px", marginBottom: "12px" }}>
             <h2>Analítica del complejo</h2>
             <span className="hint" style={{ margin: 0 }}>
@@ -550,6 +595,8 @@ const DashboardPage = () => {
               </div>
             </div>
           </div>
+            </>
+          )}
 
           <div className="grid bottom">
             {/* Lista de usuarios / equipo */}
@@ -623,28 +670,30 @@ const DashboardPage = () => {
               </div>
             </div>
 
-            {/* Cronómetro */}
-            <div className="tracker">
-              <h3>Cronómetro</h3>
-              <div className="tracker-time">{fmt(seconds)}</div>
-              <div className="tracker-controls">
-                <button
-                  className="tc-pause"
-                  onClick={() => setTimerOn((t) => !t)}
-                >
-                  {timerOn ? "❚❚" : "▶"}
-                </button>
-                <button
-                  className="tc-stop"
-                  onClick={() => {
-                    setTimerOn(false);
-                    setSeconds(0);
-                  }}
-                >
-                  ■
-                </button>
+            {esAdmin && (
+              /* Cronómetro */
+              <div className="tracker">
+                <h3>Cronómetro</h3>
+                <div className="tracker-time">{fmt(seconds)}</div>
+                <div className="tracker-controls">
+                  <button
+                    className="tc-pause"
+                    onClick={() => setTimerOn((t) => !t)}
+                  >
+                    {timerOn ? "❚❚" : "▶"}
+                  </button>
+                  <button
+                    className="tc-stop"
+                    onClick={() => {
+                      setTimerOn(false);
+                      setSeconds(0);
+                    }}
+                  >
+                    ■
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* ---------- Gestión de usuarios (solo admin) ---------- */}
@@ -759,16 +808,25 @@ const DashboardPage = () => {
               </div>
 
               {(editing || agregando) && (
-                <form
-                  onSubmit={handleGuardar}
-                  className="form-card"
-                  style={{ marginTop: "20px", maxWidth: "560px" }}
+                <div
+                  className="modal-overlay"
+                  onClick={() => {
+                    setEditing(null);
+                    setAgregando(false);
+                    setForm(emptyForm);
+                  }}
                 >
-                  <h3 style={{ marginBottom: "15px" }}>
-                    {editing
-                      ? `Editar usuario #${editing.id}`
-                      : `Agregar ${tipoAlCrear === "empleado" ? "empleado" : "cliente"}`}
-                  </h3>
+                  <div
+                    className="modal"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ maxWidth: "520px" }}
+                  >
+                  <form onSubmit={handleGuardar}>
+                    <h3>
+                      {editing
+                        ? `Editar usuario #${editing.id}`
+                        : `Agregar ${tipoAlCrear === "empleado" ? "empleado" : "cliente"}`}
+                    </h3>
                   <div className="form-group">
                     <label>Nombre:</label>
                     <input
@@ -794,6 +852,10 @@ const DashboardPage = () => {
                       value={form.ci}
                       onChange={handleFormChange}
                       required
+                      inputMode="numeric"
+                      pattern="[0-9]{4,10}"
+                      maxLength={10}
+                      title="Entre 4 y 10 dígitos, sin letras."
                     />
                   </div>
                   <div className="form-group">
@@ -802,6 +864,10 @@ const DashboardPage = () => {
                       name="celular"
                       value={form.celular}
                       onChange={handleFormChange}
+                      inputMode="tel"
+                      pattern="\+?[0-9]{7,15}"
+                      maxLength={16}
+                      title="Entre 7 y 15 dígitos, con prefijo internacional opcional."
                     />
                   </div>
                   <div className="form-group">
@@ -820,10 +886,14 @@ const DashboardPage = () => {
                       value={form.username}
                       onChange={handleFormChange}
                       required
+                      minLength={4}
+                      maxLength={30}
+                      pattern="[A-Za-z0-9._\-]{4,30}"
+                      title="Entre 4 y 30 caracteres: letras, números, punto, guion o guion bajo."
                     />
                   </div>
                   <div className="form-group">
-                    <label>Contraseña {agregando ? "(mín. 8 caracteres)" : "(opcional):"}</label>
+                    <label>Contraseña {agregando ? "" : "(opcional):"}</label>
                     <input
                       type="password"
                       name="password"
@@ -834,8 +904,14 @@ const DashboardPage = () => {
                           ? "Define la contraseña del nuevo usuario"
                           : "Dejar vacío para no cambiarla"
                       }
+                      autoComplete="new-password"
+                      required={agregando}
                       minLength={agregando ? 8 : undefined}
+                      maxLength={128}
                     />
+                    {agregando && (
+                      <small className="hint">{REQUISITOS_PASSWORD}</small>
+                    )}
                   </div>
                   <div className="modal-actions">
                     <button type="submit" className="btn-primary" disabled={saving}>
@@ -857,7 +933,9 @@ const DashboardPage = () => {
                       Cancelar
                     </button>
                   </div>
-                </form>
+                  </form>
+                  </div>
+                </div>
               )}
             </div>
           )}

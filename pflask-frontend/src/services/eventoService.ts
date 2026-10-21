@@ -10,8 +10,17 @@ import type {
 } from "../types/evento.types";
 
 export const eventoService = {
-  getAll: async (): Promise<Evento[]> => {
-    const response = await api.get<Evento[]>("/eventos");
+  getAll: async (tipo?: string): Promise<Evento[]> => {
+    const response = await api.get<Evento[]>("/eventos", {
+      params: tipo ? { tipo } : undefined,
+    });
+    return response.data;
+  },
+
+  getTipos: async (): Promise<{ valor: string; etiqueta: string }[]> => {
+    const response = await api.get<{ valor: string; etiqueta: string }[]>(
+      "/eventos/tipos"
+    );
     return response.data;
   },
 

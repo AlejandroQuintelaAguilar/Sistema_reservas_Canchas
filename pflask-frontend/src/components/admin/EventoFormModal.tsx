@@ -5,6 +5,13 @@ import type {
   DisponibilidadEventoResponse,
 } from "../../types/evento.types";
 import { Modal } from "../common/Modal";
+import {
+  CUPOS_MAX,
+  HORA_ATENCION_MAX,
+  HORA_ATENCION_MIN,
+  esNumeroValido,
+  horaFinPosterior,
+} from "../../utils/validaciones";
 import { api } from "../../services/api";
 import { eventoService } from "../../services/eventoService";
 import { CalendarioDisponibilidadEvento } from "./CalendarioDisponibilidadEvento";
@@ -14,8 +21,8 @@ interface CanchaOption {
   id_cancha?: number;
   nombre?: string;
   nombre_cancha?: string;
-  deporte?: string;
-  tipo_deporte?: string;
+  deporte?: string | null;
+  tipo_deporte?: string | null;
   estado?: string;
 }
 
@@ -30,6 +37,7 @@ const TIPOS_EVENTO_ESTANDAR = [
   "Servicio Social",
   "Torneo",
   "Deportivo",
+  "Social",
   "Taller",
   "Comunitario",
 ];
@@ -267,8 +275,24 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
       return;
     }
 
-    if (formData.hora_fin <= formData.hora_inicio) {
+    if (!horaFinPosterior(formData.hora_inicio, formData.hora_fin)) {
       setError("La hora de fin debe ser estrictamente posterior a la hora de inicio.");
+      return;
+    }
+
+    if (formData.hora_inicio < HORA_ATENCION_MIN || formData.hora_fin > HORA_ATENCION_MAX) {
+      setError(
+        `El evento debe quedar dentro del horario de atención (${HORA_ATENCION_MIN} a ${HORA_ATENCION_MAX}).`
+      );
+      return;
+    }
+
+    if (
+      formData.cupo_maximo !== undefined &&
+      formData.cupo_maximo !== null &&
+      !esNumeroValido(formData.cupo_maximo, { min: 1, entero: true, max: CUPOS_MAX })
+    ) {
+      setError(`El cupo debe ser un entero entre 1 y ${CUPOS_MAX}.`);
       return;
     }
 
@@ -601,13 +625,16 @@ export const EventoFormModal: React.FC<EventoFormModalProps> = ({
           </div>
 
           <div>
-            <label style={labelStyle}>Cupo Máximo</label>
+            <label style={labelStyle}>Cupo Máximo *</label>
             <input
               type="number"
               name="cupo_maximo"
               value={formData.cupo_maximo || ""}
               onChange={handleChange}
+              required
               min={1}
+              max={CUPOS_MAX}
+              step={1}
               style={inputStyle}
             />
           </div>
@@ -679,7 +706,7 @@ function verificarTextoDisponibilidad(
   verificando: boolean,
   disp: DisponibilidadEventoResponse | null
 ) {
-  if (verificando) return "var(--color-text-dim, #6b7280)";
+  if (verificando) return "var(--color-text-dim, #4b5563)";
   if (disp?.disponible) return "#065f46";
   return "#991b1b";
 }
