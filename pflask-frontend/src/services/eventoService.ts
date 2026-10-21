@@ -7,6 +7,8 @@ import type {
   DisponibilidadEventoResponse,
   AgendaDisponibilidadParams,
   AgendaDisponibilidadResponse,
+  DisponibilidadSemanalParams,
+  DisponibilidadSemanalResponse,
 } from "../types/evento.types";
 
 export const eventoService = {
@@ -69,6 +71,16 @@ export const eventoService = {
     }
     const response = await api.get<AgendaDisponibilidadResponse>(
       `/eventos/agenda-disponibilidad?${query.toString()}`
+    );
+    return response.data;
+  },
+
+  checkDisponibilidadSemanal: async (
+    params: DisponibilidadSemanalParams
+  ): Promise<DisponibilidadSemanalResponse> => {
+    const response = await api.post<DisponibilidadSemanalResponse>(
+      "/eventos/disponibilidad-semanal",
+      params
     );
     return response.data;
   },

@@ -22,6 +22,12 @@ export interface Evento {
   canchas_detalle?: CanchaEventoDetalle[];
 }
 
+export interface SesionEventoDTO {
+  fecha_evento: string;
+  hora_inicio: string;
+  hora_fin: string;
+}
+
 export interface CreateEventoDTO {
   nombre_evento: string;
   tipo_evento?: string;
@@ -34,6 +40,52 @@ export interface CreateEventoDTO {
   descripcion?: string;
   id_cancha: number;
   ids_canchas?: number[];
+  repeticiones_semanales?: number;
+  sesiones_programadas?: SesionEventoDTO[];
+}
+
+export interface AlternativaHoraria {
+  hora_inicio: string;
+  hora_fin: string;
+  direccion: "anterior" | "posterior";
+  distancia_min: number;
+}
+
+export interface SesionSemanalEstado {
+  numero_semana: number;
+  fecha_evento: string;
+  hora_inicio: string;
+  hora_fin: string;
+  hora_inicio_base: string;
+  hora_fin_base: string;
+  horario_ajustado: boolean;
+  disponible: boolean;
+  disponible_en_base: boolean;
+  motivo?: string | null;
+  motivo_base?: string | null;
+  alternativas_anteriores: AlternativaHoraria[];
+  alternativas_posteriores: AlternativaHoraria[];
+}
+
+export interface DisponibilidadSemanalParams {
+  ids_canchas: number[];
+  fecha_evento: string;
+  hora_inicio: string;
+  hora_fin: string;
+  repeticiones_semanales: number;
+  horarios_personalizados?: Record<
+    string,
+    { hora_inicio: string; hora_fin: string }
+  >;
+}
+
+export interface DisponibilidadSemanalResponse {
+  todas_disponibles: boolean;
+  repeticiones_semanales: number;
+  semanas_libres: number;
+  semanas_con_conflicto: number;
+  ids_canchas: number[];
+  sesiones: SesionSemanalEstado[];
 }
 
 export interface UpdateEventoDTO extends Partial<CreateEventoDTO> {}
@@ -111,4 +163,36 @@ export function buildWhatsAppEventoUrl(evento: Evento): string | null {
 
   const mensaje = `Hola, me gustaría obtener más información sobre el evento "${evento.nombre_evento}" programado para el ${evento.fecha_evento} (${evento.hora_inicio} - ${evento.hora_fin}).`;
   return `https://wa.me/${numeroNormalizado}?text=${encodeURIComponent(mensaje)}`;
+}
+
+export type EstadoTemporalEvento = "proximo" | "en_curso" | "pasado";
+
+/**
+ * Determina de forma pura si un evento está próximo, en curso o finalizado (pasado)
+ * comparando su fecha y horario contra la fecha/hora local del dispositivo.
+ */
+export function obtenerEstadoTemporalEvento(
+  evento: Pick<Evento, "fecha_evento" | "hora_inicio" | "hora_fin">
+): EstadoTemporalEvento {
+  const ahora = new Date();
+  const hoyISO = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, "0")}-${String(ahora.getDate()).padStart(2, "0")}`;
+  const horaActual = `${String(ahora.getHours()).padStart(2, "0")}:${String(ahora.getMinutes()).padStart(2, "0")}`;
+
+  const fechaEv = (evento.fecha_evento || "").slice(0, 10);
+  const hIni = (evento.hora_inicio || "00:00").slice(0, 5);
+  const hFin = (evento.hora_fin || "23:59").slice(0, 5);
+
+  if (fechaEv < hoyISO) {
+    return "pasado";
+  }
+  if (fechaEv > hoyISO) {
+    return "proximo";
+  }
+  if (hFin <= horaActual) {
+    return "pasado";
+  }
+  if (hIni <= horaActual && horaActual < hFin) {
+    return "en_curso";
+  }
+  return "proximo";
 }

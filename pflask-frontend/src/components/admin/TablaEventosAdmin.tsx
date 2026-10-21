@@ -1,5 +1,8 @@
 import React from "react";
-import type { Evento } from "../../types/evento.types";
+import {
+  obtenerEstadoTemporalEvento,
+  type Evento,
+} from "../../types/evento.types";
 import { Badge } from "../common/Badge";
 
 interface TablaEventosAdminProps {
@@ -24,6 +27,7 @@ export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({
             <th>ID</th>
             <th>Nombre del Evento</th>
             <th>Tipo</th>
+            <th>Estado</th>
             <th>Fecha</th>
             <th>Horario</th>
             <th>Cancha(s) Reservada(s)</th>
@@ -36,7 +40,7 @@ export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({
           {eventos.length === 0 ? (
             <tr>
               <td
-                colSpan={9}
+                colSpan={10}
                 style={{
                   textAlign: "center",
                   padding: "20px",
@@ -52,9 +56,16 @@ export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({
                 e.nombres_canchas && e.nombres_canchas.length > 0
                   ? e.nombres_canchas
                   : [e.nombre_cancha || `Cancha #${e.id_cancha}`];
+              const estadoTemporal = obtenerEstadoTemporalEvento(e);
+              const esPasado = estadoTemporal === "pasado";
 
               return (
-                <tr key={e.id_evento}>
+                <tr
+                  key={e.id_evento}
+                  style={{
+                    opacity: esPasado ? 0.78 : 1,
+                  }}
+                >
                   <td style={{ color: "var(--color-text-dim, #6b7280)" }}>
                     {e.id_evento}
                   </td>
@@ -68,6 +79,15 @@ export const TablaEventosAdmin: React.FC<TablaEventosAdminProps> = ({
                   </td>
                   <td>
                     <Badge variant="primary">{e.tipo_evento || "Social"}</Badge>
+                  </td>
+                  <td>
+                    {estadoTemporal === "en_curso" ? (
+                      <Badge variant="warning">En curso</Badge>
+                    ) : estadoTemporal === "proximo" ? (
+                      <Badge variant="success">Próximo</Badge>
+                    ) : (
+                      <Badge variant="neutral">Finalizado</Badge>
+                    )}
                   </td>
                   <td style={{ color: "var(--color-text-dim, #6b7280)" }}>
                     {e.fecha_evento}

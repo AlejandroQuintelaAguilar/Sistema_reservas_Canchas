@@ -134,6 +134,48 @@ class EventoValidator:
         if "contacto" in data:
             errors.extend(EventoValidator._validar_contacto(data.get("contacto")))
 
+        # Validar repeticiones_semanales opcional
+        if "repeticiones_semanales" in data and data["repeticiones_semanales"] not in (None, ""):
+            try:
+                rep = int(data["repeticiones_semanales"])
+                if rep < 1 or rep > 12:
+                    errors.append("El número de semanas ('repeticiones_semanales') debe estar entre 1 y 12.")
+            except (ValueError, TypeError):
+                errors.append("El campo 'repeticiones_semanales' debe ser un número entero.")
+
+        # Validar sesiones_programadas opcional (para series semanales con horarios ajustados)
+        if "sesiones_programadas" in data and data["sesiones_programadas"] is not None:
+            sesiones = data["sesiones_programadas"]
+            if not isinstance(sesiones, list) or len(sesiones) == 0:
+                errors.append("'sesiones_programadas' debe ser una lista no vacía.")
+            elif len(sesiones) > 12:
+                errors.append("No se pueden programar más de 12 sesiones semanales a la vez.")
+            else:
+                for idx, ses in enumerate(sesiones, start=1):
+                    if not isinstance(ses, dict):
+                        errors.append(f"La sesión #{idx} tiene un formato inválido.")
+                        continue
+                    f_ses_str = ses.get("fecha_evento") or ses.get("fecha")
+                    hi_ses_str = ses.get("hora_inicio")
+                    hf_ses_str = ses.get("hora_fin")
+                    if not f_ses_str or not hi_ses_str or not hf_ses_str:
+                        errors.append(f"La sesión #{idx} debe incluir 'fecha_evento', 'hora_inicio' y 'hora_fin'.")
+                        continue
+                    try:
+                        f_ses = datetime.strptime(str(f_ses_str).strip(), "%Y-%m-%d").date()
+                        if f_ses < date.today():
+                            errors.append(f"La fecha de la sesión #{idx} ({f_ses_str}) no puede ser anterior a hoy.")
+                    except (ValueError, TypeError):
+                        errors.append(f"La fecha de la sesión #{idx} debe tener formato YYYY-MM-DD.")
+                    hi_s, err_i = EventoValidator._parse_hora(hi_ses_str, f"hora_inicio (sesión #{idx})")
+                    hf_s, err_f = EventoValidator._parse_hora(hf_ses_str, f"hora_fin (sesión #{idx})")
+                    if err_i or err_f:
+                        errors.append(f"Las horas de la sesión #{idx} deben tener formato HH:MM.")
+                    elif hf_s <= hi_s:
+                        errors.append(f"En la sesión #{idx}, la hora de fin debe ser posterior a la de inicio.")
+                    else:
+                        errors.extend(EventoValidator._validar_rango_operativo(hi_s, hf_s))
+
         if errors:
             return False, errors
         return True, []

@@ -1,5 +1,9 @@
 import React, { useState, useMemo } from "react";
-import type { Evento, CreateEventoDTO } from "../types/evento.types";
+import {
+  obtenerEstadoTemporalEvento,
+  type Evento,
+  type CreateEventoDTO,
+} from "../types/evento.types";
 import { TablaEventosAdmin } from "../components/admin/TablaEventosAdmin";
 import { EventoFormModal } from "../components/admin/EventoFormModal";
 import { useEventos } from "../hooks/useEventos";
@@ -13,6 +17,8 @@ interface AdminEventosPageProps {
   onActualizarEvento?: (id: number, data: CreateEventoDTO) => Promise<void>;
   onEliminarEvento?: (id: number) => Promise<void>;
 }
+
+type FiltroVigencia = "vigentes" | "pasados" | "todos";
 
 export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
   const hookData = useEventos();
@@ -29,10 +35,32 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
   const [modalAbierto, setModalAbierto] = useState(false);
   const [eventoEditar, setEventoEditar] = useState<Evento | null>(null);
 
+  // Pestaña activa de vigencia: por defecto muestra los eventos próximos / en curso
+  const [filtroVigencia, setFiltroVigencia] =
+    useState<FiltroVigencia>("vigentes");
+
   // Filtros de búsqueda rápida para Administrador y Empleado
   const [busqueda, setBusqueda] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [filtroFecha, setFiltroFecha] = useState("");
+
+  const contadoresVigencia = useMemo(() => {
+    let vigentes = 0;
+    let pasados = 0;
+    for (const ev of eventos) {
+      const est = obtenerEstadoTemporalEvento(ev);
+      if (est === "pasado") {
+        pasados++;
+      } else {
+        vigentes++;
+      }
+    }
+    return {
+      vigentes,
+      pasados,
+      todos: eventos.length,
+    };
+  }, [eventos]);
 
   const tiposDisponibles = useMemo(() => {
     return Array.from(
@@ -42,18 +70,46 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
 
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    return eventos.filter((ev) => {
+    const lista = eventos.filter((ev) => {
+      const estadoTemp = obtenerEstadoTemporalEvento(ev);
+      const coincideVigencia =
+        filtroVigencia === "todos"
+          ? true
+          : filtroVigencia === "vigentes"
+            ? estadoTemp !== "pasado"
+            : estadoTemp === "pasado";
+
+      const nombresCanchasTexto = (
+        ev.nombres_canchas && ev.nombres_canchas.length > 0
+          ? ev.nombres_canchas.join(" ")
+          : ev.nombre_cancha || ""
+      ).toLowerCase();
+
       const coincideTexto =
         !q ||
         ev.nombre_evento.toLowerCase().includes(q) ||
-        (ev.nombre_cancha || "").toLowerCase().includes(q) ||
-        (ev.organizador || "").toLowerCase().includes(q);
+        nombresCanchasTexto.includes(q) ||
+        (ev.organizador || "").toLowerCase().includes(q) ||
+        (ev.contacto || "").toLowerCase().includes(q);
       const coincideTipo =
         filtroTipo === "todos" || ev.tipo_evento === filtroTipo;
       const coincideFecha = !filtroFecha || ev.fecha_evento === filtroFecha;
-      return coincideTexto && coincideTipo && coincideFecha;
+
+      return (
+        coincideVigencia && coincideTexto && coincideTipo && coincideFecha
+      );
     });
-  }, [eventos, busqueda, filtroTipo, filtroFecha]);
+
+    // Ordenar: vigentes del más cercano al más lejano; pasados del más reciente al más antiguo
+    return [...lista].sort((a, b) => {
+      const claveA = `${a.fecha_evento}T${a.hora_inicio}`;
+      const claveB = `${b.fecha_evento}T${b.hora_inicio}`;
+      if (filtroVigencia === "pasados") {
+        return claveB.localeCompare(claveA);
+      }
+      return claveA.localeCompare(claveB);
+    });
+  }, [eventos, filtroVigencia, busqueda, filtroTipo, filtroFecha]);
 
   const handleNuevoEvento = () => {
     setEventoEditar(null);
@@ -104,22 +160,111 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
     fontSize: "14px",
   };
 
+  const tabButtonStyle = (activo: boolean): React.CSSProperties => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 14px",
+    borderRadius: "6px",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    border: activo
+      ? "1px solid var(--primary, #10b981)"
+      : "1px solid var(--color-border, #374151)",
+    backgroundColor: activo
+      ? "rgba(16, 185, 129, 0.14)"
+      : "var(--color-bg-elevated)",
+    color: activo ? "var(--primary, #10b981)" : "var(--color-text-dim)",
+    transition: "all 0.15s ease",
+  });
+
+  const badgeCountStyle = (activo: boolean): React.CSSProperties => ({
+    padding: "2px 7px",
+    borderRadius: "999px",
+    fontSize: "11px",
+    fontWeight: 700,
+    backgroundColor: activo
+      ? "var(--primary, #10b981)"
+      : "rgba(156, 163, 175, 0.2)",
+    color: activo ? "#0b1320" : "var(--color-text)",
+  });
+
   return (
     <AppLayout
       title="Gestión y Reserva de Eventos"
       subtitle="Programa eventos, reserva horarios de cancha, modifica o libera eventos del complejo deportivo."
     >
+      {/* Barra de pestañas: Vigentes vs Historial de Pasados */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
+          marginTop: "8px",
+          marginBottom: "14px",
+          paddingBottom: "12px",
+          borderBottom: "1px solid var(--color-border)",
+        }}
+      >
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => setFiltroVigencia("vigentes")}
+            style={tabButtonStyle(filtroVigencia === "vigentes")}
+          >
+            <span>Próximos / Vigentes</span>
+            <span style={badgeCountStyle(filtroVigencia === "vigentes")}>
+              {contadoresVigencia.vigentes}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFiltroVigencia("pasados")}
+            style={tabButtonStyle(filtroVigencia === "pasados")}
+          >
+            <span>Historial de Pasados</span>
+            <span style={badgeCountStyle(filtroVigencia === "pasados")}>
+              {contadoresVigencia.pasados}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFiltroVigencia("todos")}
+            style={tabButtonStyle(filtroVigencia === "todos")}
+          >
+            <span>Todos</span>
+            <span style={badgeCountStyle(filtroVigencia === "todos")}>
+              {contadoresVigencia.todos}
+            </span>
+          </button>
+        </div>
+
+        <button onClick={handleNuevoEvento} className="btn-success">
+          <span style={{ fontSize: "16px", fontWeight: "bold" }}>+</span>
+          {"  Reservar / Añadir Evento"}
+        </button>
+      </div>
+
+      {/* Barra de filtros secundarios */}
       <div
         className="header-row"
         style={{
-          marginTop: "8px",
           marginBottom: "16px",
           flexWrap: "wrap",
           gap: "12px",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: "18px" }}>
-          Eventos registrados ({eventosFiltrados.length})
+        <h2 style={{ margin: 0, fontSize: "17px" }}>
+          {filtroVigencia === "vigentes"
+            ? `Eventos vigentes (${eventosFiltrados.length})`
+            : filtroVigencia === "pasados"
+              ? `Eventos finalizados (${eventosFiltrados.length})`
+              : `Todos los eventos (${eventosFiltrados.length})`}
         </h2>
 
         <div
@@ -134,8 +279,8 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
             type="text"
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar por evento, cancha u organizador..."
-            style={{ ...controlStyle, minWidth: "240px" }}
+            placeholder="Buscar por evento, cancha, organizador o teléfono..."
+            style={{ ...controlStyle, minWidth: "260px" }}
           />
 
           <select
@@ -155,7 +300,7 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
             type="date"
             value={filtroFecha}
             onChange={(e) => setFiltroFecha(e.target.value)}
-            title="Filtrar por fecha"
+            title="Filtrar por fecha exacta"
             style={controlStyle}
           />
 
@@ -170,14 +315,9 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
               className="btn-secondary"
               style={{ padding: "8px 12px", fontSize: "13px" }}
             >
-              Limpiar
+              Limpiar filtros
             </button>
           )}
-
-          <button onClick={handleNuevoEvento} className="btn-success">
-            <span style={{ fontSize: "16px", fontWeight: "bold" }}>+</span>
-            {"  Reservar / Añadir Evento"}
-          </button>
         </div>
       </div>
 
@@ -213,7 +353,17 @@ export const AdminEventosPage: React.FC<AdminEventosPageProps> = (props) => {
         >
           {eventos.length === 0
             ? "No hay eventos registrados en este momento."
-            : "No se encontraron eventos que coincidan con los filtros aplicados."}
+            : filtroVigencia === "vigentes" &&
+                !busqueda &&
+                filtroTipo === "todos" &&
+                !filtroFecha
+              ? "No hay eventos próximos programados. Puedes consultar el 'Historial de Pasados' o programar uno nuevo."
+              : filtroVigencia === "pasados" &&
+                  !busqueda &&
+                  filtroTipo === "todos" &&
+                  !filtroFecha
+                ? "Aún no hay eventos finalizados en el historial."
+                : "No se encontraron eventos que coincidan con los filtros aplicados."}
         </div>
       )}
 

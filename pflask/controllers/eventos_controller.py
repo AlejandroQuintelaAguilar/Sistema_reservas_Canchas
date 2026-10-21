@@ -94,6 +94,37 @@ def get_agenda_disponibilidad():
         return jsonify({"error": "Error al obtener la agenda de disponibilidad", "detalle": str(ex)}), 500
 
 
+@eventos_bp.route("/disponibilidad-semanal", methods=["POST"])
+def check_disponibilidad_semanal():
+    try:
+        data = request.get_json() or {}
+        ids_canchas = data.get("ids_canchas") or data.get("id_cancha")
+        fecha = data.get("fecha_evento") or data.get("fecha")
+        hora_inicio = data.get("hora_inicio")
+        hora_fin = data.get("hora_fin")
+        repeticiones = data.get("repeticiones_semanales", 1)
+        horarios_personalizados = data.get("horarios_personalizados") or {}
+
+        if not all([ids_canchas, fecha, hora_inicio, hora_fin]):
+            return jsonify({
+                "error": "Faltan parámetros requeridos (ids_canchas, fecha_evento, hora_inicio, hora_fin)."
+            }), 400
+
+        resultado = EventosService.verificar_serie_semanal(
+            ids_canchas=ids_canchas,
+            fecha_inicial_str=fecha,
+            hora_inicio_str=hora_inicio,
+            hora_fin_str=hora_fin,
+            repeticiones_semanales=repeticiones,
+            horarios_personalizados=horarios_personalizados,
+        )
+        return jsonify(resultado), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as ex:
+        return jsonify({"error": "Error al verificar la serie semanal", "detalle": str(ex)}), 500
+
+
 @eventos_bp.route("/<int:id_evento>", methods=["GET"])
 def get_evento(id_evento):
     try:

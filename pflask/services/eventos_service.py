@@ -575,18 +575,166 @@ class EventosService:
         }
 
     @classmethod
-    def create_evento(cls, data):
+    def _buscar_alternativas_dia(cls, lista_canchas, fecha_eval, h_ini_base, h_fin_base):
+        """
+        Busca en la misma fecha horarios alternativos anteriores y posteriores libres
+        para todas las canchas seleccionadas, conservando exactamente la duración solicitada.
+        """
+        dt_ini_base = datetime.combine(fecha_eval, h_ini_base)
+        dt_fin_base = datetime.combine(fecha_eval, h_fin_base)
+        duracion = dt_fin_base - dt_ini_base
+        if duracion.total_seconds() <= 0:
+            return [], []
+
+        min_base = h_ini_base.hour * 60 + h_ini_base.minute
+        anteriores = []
+        posteriores = []
+
+        # Evaluar candidatos cada 60 minutos desde 06:00 hasta 23:00
+        cursor_dt = datetime.combine(fecha_eval, HORA_APERTURA_COMPLEJO)
+        cierre_dt = datetime.combine(fecha_eval, HORA_CIERRE_COMPLEJO)
+
+        while cursor_dt + duracion <= cierre_dt:
+            cand_ini = cursor_dt.time()
+            cand_fin = (cursor_dt + duracion).time()
+
+            if cand_ini != h_ini_base:
+                try:
+                    cls._verificar_disponibilidad(
+                        ids_canchas=lista_canchas,
+                        fecha=fecha_eval,
+                        hora_inicio=cand_ini,
+                        hora_fin=cand_fin,
+                        validar_hora_pasada=True,
+                    )
+                    min_cand = cand_ini.hour * 60 + cand_ini.minute
+                    item = {
+                        "hora_inicio": cand_ini.strftime("%H:%M"),
+                        "hora_fin": cand_fin.strftime("%H:%M"),
+                        "direccion": "anterior" if min_cand < min_base else "posterior",
+                        "distancia_min": abs(min_cand - min_base),
+                    }
+                    if min_cand < min_base:
+                        anteriores.append(item)
+                    else:
+                        posteriores.append(item)
+                except ValueError:
+                    pass
+
+            cursor_dt += timedelta(hours=1)
+
+        # Ordenar anteriores desde el más cercano al horario base hacia atrás
+        anteriores.sort(key=lambda x: x["distancia_min"])
+        # Ordenar posteriores desde el más cercano al horario base hacia adelante
+        posteriores.sort(key=lambda x: x["distancia_min"])
+
+        return anteriores[:4], posteriores[:4]
+
+    @classmethod
+    def verificar_serie_semanal(
+        cls,
+        ids_canchas,
+        fecha_inicial_str,
+        hora_inicio_str,
+        hora_fin_str,
+        repeticiones_semanales=1,
+        horarios_personalizados=None,
+    ):
+        """
+        Verifica una serie de N semanas consecutivas (ej. 4 sábados).
+        Para cada semana que tenga conflicto en el horario solicitado, devuelve el motivo
+        y sugiere horarios libres anteriores y posteriores en ese mismo día.
+        """
         cls._asegurar_tabla_evento_cancha()
-        fecha = datetime.strptime(str(data["fecha_evento"]).strip(), "%Y-%m-%d").date()
-        if fecha < date.today():
-            raise ValueError("La fecha del evento no puede ser anterior a la fecha actual.")
+        lista_canchas = cls._extraer_lista_canchas(ids_canchas)
+        if not lista_canchas:
+            raise ValueError("Selecciona al menos una cancha para verificar la serie semanal.")
 
-        inicio = datetime.strptime(str(data["hora_inicio"]).strip(), "%H:%M").time()
-        fin = datetime.strptime(str(data["hora_fin"]).strip(), "%H:%M").time()
+        fecha_base = datetime.strptime(str(fecha_inicial_str).strip(), "%Y-%m-%d").date()
+        h_ini_base = datetime.strptime(str(hora_inicio_str).strip(), "%H:%M").time()
+        h_fin_base = datetime.strptime(str(hora_fin_str).strip(), "%H:%M").time()
 
-        if fin <= inicio:
+        if h_fin_base <= h_ini_base:
             raise ValueError("La hora de fin debe ser posterior a la hora de inicio.")
 
+        rep = max(1, min(12, int(repeticiones_semanales or 1)))
+        overrides = horarios_personalizados if isinstance(horarios_personalizados, dict) else {}
+
+        sesiones = []
+        libres_count = 0
+        conflictos_count = 0
+
+        for idx in range(rep):
+            fecha_sem = fecha_base + timedelta(weeks=idx)
+            fecha_iso = fecha_sem.isoformat()
+
+            override_sem = overrides.get(fecha_iso) or {}
+            h_ini_eval_str = override_sem.get("hora_inicio") or h_ini_base.strftime("%H:%M")
+            h_fin_eval_str = override_sem.get("hora_fin") or h_fin_base.strftime("%H:%M")
+            es_horario_ajustado = (
+                h_ini_eval_str != h_ini_base.strftime("%H:%M")
+                or h_fin_eval_str != h_fin_base.strftime("%H:%M")
+            )
+
+            # Evaluar disponibilidad en el horario elegido para esta semana
+            disp_eval = cls.verificar_disponibilidad_cancha(
+                ids_canchas=lista_canchas,
+                fecha_str=fecha_iso,
+                hora_inicio_str=h_ini_eval_str,
+                hora_fin_str=h_fin_eval_str,
+            )
+
+            # Además calcular si el horario base original tenía conflicto (para permitir cambiar de alternativa)
+            disp_base = (
+                cls.verificar_disponibilidad_cancha(
+                    ids_canchas=lista_canchas,
+                    fecha_str=fecha_iso,
+                    hora_inicio_str=h_ini_base.strftime("%H:%M"),
+                    hora_fin_str=h_fin_base.strftime("%H:%M"),
+                )
+                if es_horario_ajustado
+                else disp_eval
+            )
+
+            alt_ant, alt_post = [], []
+            if not disp_eval["disponible"] or not disp_base["disponible"]:
+                alt_ant, alt_post = cls._buscar_alternativas_dia(
+                    lista_canchas, fecha_sem, h_ini_base, h_fin_base
+                )
+
+            if disp_eval["disponible"]:
+                libres_count += 1
+            else:
+                conflictos_count += 1
+
+            sesiones.append({
+                "numero_semana": idx + 1,
+                "fecha_evento": fecha_iso,
+                "hora_inicio": h_ini_eval_str,
+                "hora_fin": h_fin_eval_str,
+                "hora_inicio_base": h_ini_base.strftime("%H:%M"),
+                "hora_fin_base": h_fin_base.strftime("%H:%M"),
+                "horario_ajustado": es_horario_ajustado,
+                "disponible": disp_eval["disponible"],
+                "disponible_en_base": disp_base["disponible"],
+                "motivo": disp_eval.get("motivo") if not disp_eval["disponible"] else None,
+                "motivo_base": disp_base.get("motivo") if not disp_base["disponible"] else None,
+                "alternativas_anteriores": alt_ant,
+                "alternativas_posteriores": alt_post,
+            })
+
+        return {
+            "todas_disponibles": conflictos_count == 0,
+            "repeticiones_semanales": rep,
+            "semanas_libres": libres_count,
+            "semanas_con_conflicto": conflictos_count,
+            "ids_canchas": lista_canchas,
+            "sesiones": sesiones,
+        }
+
+    @classmethod
+    def create_evento(cls, data):
+        cls._asegurar_tabla_evento_cancha()
         ids_canchas = cls._extraer_lista_canchas(
             data.get("ids_canchas") if data.get("ids_canchas") is not None else data.get("id_cancha")
         )
@@ -599,28 +747,71 @@ class EventosService:
             else None
         )
 
-        # Verificar disponibilidad atómica de todas las canchas seleccionadas
-        cls._verificar_disponibilidad(ids_canchas, fecha, inicio, fin)
+        # Determinar lista de sesiones a programar (evento único o serie semanal)
+        sesiones_raw = data.get("sesiones_programadas")
+        repeticiones = int(data.get("repeticiones_semanales") or 1)
+
+        lista_sesiones = []
+        if isinstance(sesiones_raw, list) and len(sesiones_raw) > 0:
+            for s in sesiones_raw:
+                f_s = datetime.strptime(str(s["fecha_evento"]).strip(), "%Y-%m-%d").date()
+                hi_s = datetime.strptime(str(s["hora_inicio"]).strip(), "%H:%M").time()
+                hf_s = datetime.strptime(str(s["hora_fin"]).strip(), "%H:%M").time()
+                lista_sesiones.append((f_s, hi_s, hf_s))
+        else:
+            fecha_base = datetime.strptime(str(data["fecha_evento"]).strip(), "%Y-%m-%d").date()
+            inicio_base = datetime.strptime(str(data["hora_inicio"]).strip(), "%H:%M").time()
+            fin_base = datetime.strptime(str(data["hora_fin"]).strip(), "%H:%M").time()
+            for idx in range(max(1, repeticiones)):
+                lista_sesiones.append((fecha_base + timedelta(weeks=idx), inicio_base, fin_base))
+
+        # 1. Validar disponibilidad atómica de todas las sesiones antes de insertar
+        for idx, (f_ses, hi_ses, hf_ses) in enumerate(lista_sesiones, start=1):
+            if f_ses < date.today():
+                raise ValueError(f"La fecha de la sesión #{idx} ({f_ses}) no puede ser anterior a la fecha actual.")
+            if hf_ses <= hi_ses:
+                raise ValueError(f"En la sesión #{idx} ({f_ses}), la hora de fin debe ser posterior a la de inicio.")
+            try:
+                cls._verificar_disponibilidad(ids_canchas, f_ses, hi_ses, hf_ses)
+            except ValueError as ve:
+                if len(lista_sesiones) > 1:
+                    raise ValueError(f"Semana {idx} ({f_ses}): {ve}") from ve
+                raise
 
         canchas_objs = Cancha.query.filter(Cancha.id_cancha.in_(ids_canchas)).all()
+        nombre_base = str(data["nombre_evento"]).strip()
+        tipo_ev = str(data["tipo_evento"]).strip() if data.get("tipo_evento") else None
+        organizador_ev = str(data["organizador"]).strip() if data.get("organizador") else None
+        contacto_ev = str(data["contacto"]).strip() if data.get("contacto") else None
+        descripcion_ev = str(data["descripcion"]).strip() if data.get("descripcion") else None
 
-        nuevo_evento = Evento(
-            nombre_evento=str(data["nombre_evento"]).strip(),
-            tipo_evento=str(data["tipo_evento"]).strip() if data.get("tipo_evento") else None,
-            fecha_evento=fecha,
-            hora_inicio=inicio,
-            hora_fin=fin,
-            cupo_maximo=cupo_maximo,
-            organizador=str(data["organizador"]).strip() if data.get("organizador") else None,
-            contacto=str(data["contacto"]).strip() if data.get("contacto") else None,
-            descripcion=str(data["descripcion"]).strip() if data.get("descripcion") else None,
-            id_cancha=ids_canchas[0],
-            canchas=canchas_objs,
-        )
+        eventos_creados = []
+        total_sesiones = len(lista_sesiones)
 
-        db.session.add(nuevo_evento)
+        for idx, (f_ses, hi_ses, hf_ses) in enumerate(lista_sesiones, start=1):
+            nombre_final = (
+                f"{nombre_base} (Semana {idx}/{total_sesiones})"
+                if total_sesiones > 1
+                else nombre_base
+            )
+            nuevo_evento = Evento(
+                nombre_evento=nombre_final,
+                tipo_evento=tipo_ev,
+                fecha_evento=f_ses,
+                hora_inicio=hi_ses,
+                hora_fin=hf_ses,
+                cupo_maximo=cupo_maximo,
+                organizador=organizador_ev,
+                contacto=contacto_ev,
+                descripcion=descripcion_ev,
+                id_cancha=ids_canchas[0],
+                canchas=list(canchas_objs),
+            )
+            db.session.add(nuevo_evento)
+            eventos_creados.append(nuevo_evento)
+
         db.session.commit()
-        return nuevo_evento
+        return eventos_creados[0]
 
     @classmethod
     def update_evento(cls, id_evento, data):
